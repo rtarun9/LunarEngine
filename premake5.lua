@@ -21,6 +21,8 @@ project "LunarEngine"
     
     files { "Source/**.hpp", "Source/**.cpp" }
 
+    links { "d3d12.lib", "dxgi.lib" }
+    
     filter "configurations:Debug"
         defines { "DEF_LUNAR_DEBUG" }
         symbols "On"

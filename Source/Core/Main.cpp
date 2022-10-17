@@ -34,7 +34,7 @@ int main()
         // Setup engine.
         lunar::core::Engine engine{ config };
 
-        uint32_t previous_frame_time = 0u;
+        u32 previous_frame_time = 0u;
         
         // Main game loop.
         bool quit = false;
@@ -42,7 +42,7 @@ int main()
         while (!quit)
         {
             const uint32_t current_frame_time = SDL_GetTicks();
-            const float delta_time = static_cast<float>((current_frame_time - previous_frame_time) * 1e-3);
+            const f32 delta_time = static_cast<float>((current_frame_time - previous_frame_time) * 1e-3);
             previous_frame_time = current_frame_time;
 
             SDL_Event event{};
@@ -53,7 +53,7 @@ int main()
                     quit = true;
                 }
 
-                const uint8_t* current_key_state = SDL_GetKeyboardState(nullptr);
+                const u8* current_key_state = SDL_GetKeyboardState(nullptr);
                 if (current_key_state[SDL_SCANCODE_ESCAPE])
                 {
                     quit = true;

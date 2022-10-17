@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <chrono>
+#include <ranges>
 #include <exception>
 #include <stdexcept>
 
@@ -26,8 +27,9 @@
 #include <d3dcompiler.h>
 
 // Common includes.
-#include "Common/Helpers.hpp"
 #include "Common/DataTypes.hpp"
+#include "Common/Helpers.hpp"
+#include "Common/Globals.hpp"
 
 // For setting the Agility SDK parameters.
 extern "C"
