@@ -1,15 +1,3 @@
-# Output and VS directories 
-
+build/
 .vs/
-Bin/
-BinInt/
-
-# VS solution files
-*.sln
-*.vcxproj
-*.vcxproj.filters
-*.vcxproj.user
-
-# Agility SDK related files
-*.zip
-ThirdParty/DirectXAgilitySDK
+out/
