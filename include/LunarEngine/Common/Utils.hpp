@@ -1,10 +1,17 @@
 #pragma once
 
+inline std::string HresultToString(const HRESULT hr)
+{
+    char str[128]{};
+    sprintf_s(str, "HRESULT : 0x%08X", static_cast<UINT>(hr));
+    return std::string(str);
+}
+
 inline void ThrowIfFailed(const HRESULT hr)
 {
     if (FAILED(hr))
     {
-        throw std::runtime_error("");
+        throw std::runtime_error(HresultToString(hr));
     }
 }
 
@@ -37,3 +44,10 @@ inline std::string WstringToString(const std::wstring_view inputWString)
 
     return std::move(result);
 }
+
+inline void ErrorMessage(std::wstring_view message)
+{
+    MessageBoxW(nullptr, message.data(), L"Error!", MB_OK);
+    throw std::runtime_error(WstringToString(message));
+}
+

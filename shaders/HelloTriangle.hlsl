@@ -1,15 +1,7 @@
-static const float3 VERTEX_POSITIONS[3] = 
+struct VertexInput
 {
-    float3(-0.5f, -0.5f, 0.0f), 
-    float3(0.0f, 0.5f, 0.0f),
-    float3(0.5f, -0.5f, 0.0f)
-};
-
-static const float3 VERTEX_COLORS[3] = 
-{
-    float3(1.0f, 0.0f, 0.0f), 
-    float3(0.0f, 1.0f, 0.0f), 
-    float3(0.0f, 0.0f, 1.0f)
+    float3 position : POSITION;
+    float3 color : COLOR;
 };
 
 struct VertexOutput
@@ -18,11 +10,16 @@ struct VertexOutput
     float3 color : COLOR;
 };
 
-VertexOutput vs_main(uint vertex_id : SV_VertexID)
+cbuffer MVPBuffer : register(b0)
+{
+    row_major matrix model_matrix;
+};
+
+VertexOutput vs_main(VertexInput vertex)
 {
     VertexOutput output;
-    output.position = float4(VERTEX_POSITIONS[vertex_id], 1.0f);
-    output.color = VERTEX_COLORS[vertex_id];
+    output.position = mul(float4(vertex.position, 1.0f), model_matrix);
+    output.color = vertex.color;
 
     return output;
 }
