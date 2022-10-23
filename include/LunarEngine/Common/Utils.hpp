@@ -50,4 +50,3 @@ inline void ErrorMessage(std::wstring_view message)
     MessageBoxW(nullptr, message.data(), L"Error!", MB_OK);
     throw std::runtime_error(WstringToString(message));
 }
-

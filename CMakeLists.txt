@@ -18,7 +18,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release-Bin)
 file(GLOB_RECURSE SOURCE_FILES 
     ${CMAKE_SOURCE_DIR}/src/*.cpp
     ${CMAKE_SOURCE_DIR}/src/**/*.cpp
-    
+   
     ${CMAKE_SOURCE_DIR}/include/*.hpp
     ${CMAKE_SOURCE_DIR}/include/**/*.hpp
 )
@@ -30,5 +30,8 @@ add_executable(LunarEngine ${SOURCE_FILES})
 target_precompile_headers(LunarEngine PRIVATE include/Pch.hpp)
 target_link_libraries(LunarEngine PRIVATE ThirdParty)
 target_link_libraries(LunarEngine PRIVATE d3d11.lib dxgi.lib dxguid.lib d3dcompiler.lib)
+
+target_include_directories(LunarEngine PRIVATE include/LunarEngine/)
+target_include_directories(LunarEngine PRIVATE include/)
 
 set_property(TARGET LunarEngine PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
