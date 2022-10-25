@@ -1,33 +1,16 @@
 #include "Pch.hpp"
 
-#include "Graphics/Device.hpp"
+#include "GraphicsDevice.hpp"
 
-namespace lunar::gfx
+namespace lunar
 {
-    Device::Device(const uint32_t window_width, const uint32_t window_height, const HWND window_handle)
+    GraphicsDevice::GraphicsDevice(const uint32_t window_width, const uint32_t window_height, const HWND window_handle)
     {
-        GetRootDirectory();
-        CreateDeviceResources();
-        CreateFrameSizeDependentResources(window_width, window_height, window_handle);
+        create_device_resources();
+        create_window_size_dependent_resources(window_width, window_height, window_handle);
     }
 
-    void Device::GetRootDirectory()
-    {
-        std::filesystem::path current_directory = std::filesystem::current_path();
-
-        while (!std::filesystem::exists(current_directory / "LunarEngine"))
-        {
-            if (current_directory.has_parent_path())
-            {
-                current_directory = current_directory.parent_path();
-            }
-        }
-
-        m_root_directory = (current_directory / "LunarEngine/").string();
-        std::cout << "Root Directory: " << m_root_directory << '\n';
-    }
-
-    void Device::CreateDeviceResources()
+    void GraphicsDevice::create_device_resources()
     {
         // Create the DXGI factory for enumeration of adapters and creation of swapchain.
         uint32_t factory_creation_flags = 0;
@@ -83,8 +66,8 @@ namespace lunar::gfx
         }
     }
 
-    void Device::CreateFrameSizeDependentResources(uint32_t window_width, const uint32_t window_height,
-                                                   const HWND window_handle)
+    void GraphicsDevice::create_window_size_dependent_resources(uint32_t window_width, const uint32_t window_height,
+                                                                const HWND window_handle)
     {
         // Create the frame resources.
         // Swapchain handles swapping of back buffers and stores resources we render to and presents them to the
@@ -151,16 +134,16 @@ namespace lunar::gfx
         };
     }
 
-    void Device::UpdateSubresources(ID3D11Buffer* buffer, const void* data)
+    void GraphicsDevice::update_subresources(ID3D11Buffer* buffer, const void* data)
     {
         m_device_context->UpdateSubresource(buffer, 0u, nullptr, data, 0u, 0u);
     }
 
-    void Device::Present() { ThrowIfFailed(m_swapchain->Present(1u, 0u)); }
+    void GraphicsDevice::present() { ThrowIfFailed(m_swapchain->Present(1u, 0u)); }
 
-    ID3D11Buffer* Device::CreateBuffer(const D3D11_BUFFER_DESC& buffer_desc, const void* data)
+    WRL::ComPtr<ID3D11Buffer> GraphicsDevice::create_buffer(const D3D11_BUFFER_DESC& buffer_desc, const void* data)
     {
-        ID3D11Buffer* buffer{nullptr};
+        WRL::ComPtr<ID3D11Buffer> buffer{};
 
         D3D11_SUBRESOURCE_DATA subresource_data{};
         if (data)
@@ -175,7 +158,8 @@ namespace lunar::gfx
         return buffer;
     }
 
-    std::pair<ID3D11VertexShader*, ID3DBlob*> Device::CreateVertexShader(const std::string_view shader_path)
+    std::pair<WRL::ComPtr<ID3D11VertexShader>, WRL::ComPtr<ID3DBlob>> GraphicsDevice::create_vertex_shader(
+        const std::string_view shader_path)
     {
         // Create the vertex shader (compiling using D3DCompileFromFile).
         uint32_t shader_compilation_flag{0u};
@@ -188,15 +172,13 @@ namespace lunar::gfx
             shader_compilation_flag = D3DCOMPILE_OPTIMIZATION_LEVEL3;
         }
 
-        ID3D11VertexShader* vertex_shader{nullptr};
+        WRL::ComPtr<ID3D11VertexShader> vertex_shader{nullptr};
 
-        ID3DBlob* vertex_shader_blob{};
+        WRL::ComPtr<ID3DBlob> vertex_shader_blob{};
         WRL::ComPtr<ID3DBlob> error_blob{};
 
-        const std::string vertex_shader_path = m_root_directory + shader_path.data();
-
-        if (FAILED(::D3DCompileFromFile(StringToWstring(vertex_shader_path).c_str(), nullptr, nullptr, "vs_main",
-                                        "vs_5_0", shader_compilation_flag, 0u, &vertex_shader_blob, &error_blob)))
+        if (FAILED(::D3DCompileFromFile(StringToWstring(shader_path).c_str(), nullptr, nullptr, "vs_main", "vs_5_0",
+                                        shader_compilation_flag, 0u, &vertex_shader_blob, &error_blob)))
         {
             const char* error_message = (const char*)error_blob->GetBufferPointer();
             std::cout << error_message;
@@ -208,7 +190,7 @@ namespace lunar::gfx
         return {vertex_shader, vertex_shader_blob};
     }
 
-    ID3D11PixelShader* Device::CreatePixelShader(const std::string_view shader_path)
+    WRL::ComPtr<ID3D11PixelShader> GraphicsDevice::create_pixel_shader(const std::string_view shader_path)
     {
         uint32_t shader_compilation_flag{0u};
         if constexpr (LUNAR_DEBUG)
@@ -220,15 +202,13 @@ namespace lunar::gfx
             shader_compilation_flag = D3DCOMPILE_OPTIMIZATION_LEVEL3;
         }
 
-        ID3D11PixelShader* pixel_shader{nullptr};
+        WRL::ComPtr<ID3D11PixelShader> pixel_shader{nullptr};
 
         WRL::ComPtr<ID3DBlob> pixel_shader_blob{};
         WRL::ComPtr<ID3DBlob> error_blob{};
 
-        const std::string pixel_shader_path = m_root_directory + shader_path.data();
-
-        if (FAILED(::D3DCompileFromFile(StringToWstring(pixel_shader_path).c_str(), nullptr, nullptr, "ps_main",
-                                        "ps_5_0", shader_compilation_flag, 0u, &pixel_shader_blob, &error_blob)))
+        if (FAILED(::D3DCompileFromFile(StringToWstring(shader_path).c_str(), nullptr, nullptr, "ps_main", "ps_5_0",
+                                        shader_compilation_flag, 0u, &pixel_shader_blob, &error_blob)))
         {
             const char* error_message = (const char*)error_blob->GetBufferPointer();
             std::cout << error_message;
@@ -240,10 +220,10 @@ namespace lunar::gfx
         return pixel_shader;
     }
 
-    ID3D11InputLayout* Device::CreateInputLayout(const std::span<const D3D11_INPUT_ELEMENT_DESC> input_element_descs,
-                                                 ID3DBlob* vertex_shader_blob)
+    WRL::ComPtr<ID3D11InputLayout> GraphicsDevice::create_input_layout(
+        const std::span<const D3D11_INPUT_ELEMENT_DESC> input_element_descs, ID3DBlob* vertex_shader_blob)
     {
-        ID3D11InputLayout* input_layout{nullptr};
+        WRL::ComPtr<ID3D11InputLayout> input_layout{nullptr};
 
         ThrowIfFailed(m_device->CreateInputLayout(
             input_element_descs.data(), static_cast<uint32_t>(input_element_descs.size()),
@@ -252,18 +232,20 @@ namespace lunar::gfx
         return input_layout;
     }
 
-    ID3D11RasterizerState* Device::CreateRasterizerDesc(const D3D11_RASTERIZER_DESC& rasterizer_desc)
+    WRL::ComPtr<ID3D11RasterizerState> GraphicsDevice::create_rasterizer_state(
+        const D3D11_RASTERIZER_DESC& rasterizer_desc)
     {
-        ID3D11RasterizerState* rasterizer_state{nullptr};
+        WRL::ComPtr<ID3D11RasterizerState> rasterizer_state{nullptr};
 
         ThrowIfFailed(m_device->CreateRasterizerState(&rasterizer_desc, &rasterizer_state));
 
         return rasterizer_state;
     }
 
-    ID3D11DepthStencilState* Device::CreateDepthStencilDesc(const D3D11_DEPTH_STENCIL_DESC& depth_stencil_desc)
+    WRL::ComPtr<ID3D11DepthStencilState> GraphicsDevice::create_depth_stencil_state(
+        const D3D11_DEPTH_STENCIL_DESC& depth_stencil_desc)
     {
-        ID3D11DepthStencilState* depth_stencil_state{nullptr};
+        WRL::ComPtr<ID3D11DepthStencilState> depth_stencil_state{};
 
         ThrowIfFailed(m_device->CreateDepthStencilState(&depth_stencil_desc, &depth_stencil_state));
 

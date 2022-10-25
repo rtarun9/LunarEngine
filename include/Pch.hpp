@@ -32,4 +32,4 @@ namespace WRL = Microsoft::WRL;
 namespace Math = DirectX;
 
 // Custom global headers.
-#include "LunarEngine/Common/Utils.hpp"
+#include "LunarEngine/Utils.hpp"
