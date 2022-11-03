@@ -1,21 +1,26 @@
 #pragma once
 
-inline std::string HresultToString(const HRESULT hr)
+inline void fatalError(const std::string_view message)
+{
+    throw std::runtime_error(message.data());
+}
+
+inline std::string hresultToString(const HRESULT hr)
 {
     char str[128]{};
     sprintf_s(str, "HRESULT : 0x%08X", static_cast<UINT>(hr));
     return std::string(str);
 }
 
-inline void ThrowIfFailed(const HRESULT hr)
+inline void throwIfFailed(const HRESULT hr)
 {
     if (FAILED(hr))
     {
-        throw std::runtime_error(HresultToString(hr));
+        throw std::runtime_error(hresultToString(hr));
     }
 }
 
-inline std::wstring StringToWstring(const std::string_view inputString)
+inline std::wstring stringToWstring(const std::string_view inputString)
 {
     std::wstring result{};
     const std::string input{inputString};
@@ -30,7 +35,7 @@ inline std::wstring StringToWstring(const std::string_view inputString)
     return std::move(result);
 }
 
-inline std::string WstringToString(const std::wstring_view inputWString)
+inline std::string wstringToString(const std::wstring_view inputWString)
 {
     std::string result{};
     const std::wstring input{inputWString};
@@ -43,10 +48,4 @@ inline std::string WstringToString(const std::wstring_view inputWString)
     }
 
     return std::move(result);
-}
-
-inline void ErrorMessage(std::wstring_view message)
-{
-    MessageBoxW(nullptr, message.data(), L"Error!", MB_OK);
-    throw std::runtime_error(WstringToString(message));
 }

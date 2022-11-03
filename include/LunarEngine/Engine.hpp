@@ -1,65 +1,51 @@
 #pragma once
 
-#include "GraphicsDevice.hpp"
-
-#include <CrossWindow/CrossWindow.h>
+struct SDL_Window;
 
 namespace lunar
 {
-    struct Vertex
-    {
-        Math::XMFLOAT3 position{};
-        Math::XMFLOAT3 color{};
-    };
-
-    struct alignas(256) MVPBuffer
-    {
-        Math::XMMATRIX model_matrix{};
-    };
-
     class Engine
     {
       public:
-        Engine() = default;
-        ~Engine() { m_graphics_device->get_device_context()->Flush(); }
-
+        void init();
         void run();
 
       private:
-        void init();
-        void update(const float delta_time);
-        void render();
+        void createDeviceResources();
+        void createWindowDependentResources(const Uint2 dimensions);
 
-        inline std::string get_full_asset_path(const std::string_view asset_path)
-        {
-            return m_root_directory + asset_path.data();
-        }
+      public:
+        static constexpr uint32_t FRAME_COUNT = 3u;
 
       private:
-        xwin::Window m_window{};
-        xwin::EventQueue m_event_queue{};
+        SDL_Window* m_window{};
+        HWND m_windowHandle{};
 
-        std::string m_root_directory{};
+        Uint2 m_dimensions{};
 
-        uint32_t m_window_width{1080u};
-        uint32_t m_window_height{720u};
+        WRL::ComPtr<IDXGIFactory6> m_factory{};
+        WRL::ComPtr<ID3D12Debug5> m_debugController{};
 
-        std::unique_ptr<GraphicsDevice> m_graphics_device{};
+        WRL::ComPtr<IDXGIAdapter2> m_adapter{};
 
-      private:
-        // Rendering 'SandBox' data.
-        WRL::ComPtr<ID3D11Buffer> m_triangle_index_buffer{};
-        WRL::ComPtr<ID3D11Buffer> m_triangle_vertex_buffer{};
+        WRL::ComPtr<ID3D12Device5> m_device{};
+        WRL::ComPtr<ID3D12DebugDevice1> m_debugDevice{};
+        WRL::ComPtr<ID3D12InfoQueue> m_infoQueue{};
 
-        WRL::ComPtr<ID3D11Buffer> m_triangle_constant_buffer{};
-        MVPBuffer m_mvp_buffer_data{};
+        WRL::ComPtr<ID3D12CommandQueue> m_directCommandQueue{};
+        WRL::ComPtr<ID3D12CommandAllocator> m_commandAllocator{};
 
-        WRL::ComPtr<ID3D11VertexShader> m_triangle_vertex_shader{};
-        WRL::ComPtr<ID3D11PixelShader> m_triangle_pixel_shader{};
+        uint32_t m_frameIndex{};
+        HANDLE m_fenceEvent{};
+        WRL::ComPtr<ID3D12Fence> m_fence{};
+        uint64_t m_fenceValue{};
 
-        WRL::ComPtr<ID3D11InputLayout> m_input_layout{};
+        WRL::ComPtr<IDXGISwapChain3> m_swapchain{};
+        D3D12_VIEWPORT m_viewport{};
+        D3D12_RECT m_scissorRect{};
 
-        WRL::ComPtr<ID3D11RasterizerState> m_rasterizer_state{};
-        WRL::ComPtr<ID3D11DepthStencilState> m_depth_stencil_state{};
+        WRL::ComPtr<ID3D12DescriptorHeap> m_rtvDescriptorHeap{};
+        uint32_t m_rtvDescriptorHeapSize{};
+        std::array<WRL::ComPtr<ID3D12Resource>, FRAME_COUNT> m_renderTargetViews{};
     };
 }

@@ -1,220 +1,202 @@
-#include "Pch.hpp"
+#include "Engine.hpp"
 
-#include "LunarEngine/Engine.hpp"
+#include <SDL.h>
+#include <SDL_syswm.h>
 
 namespace lunar
 {
+    void Engine::init()
+    {
+        createDeviceResources();
+        createWindowDependentResources(m_dimensions);
+    }
+
     void Engine::run()
     {
+        // Set DPI awareness.
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+        // Initialize SDL2 and create window.
+        if (SDL_Init(SDL_INIT_EVERYTHING) < 0)
+        {
+            fatalError("Failed to initialize SDL2.");
+        }
+
+        // Get monitor dimensions.
+        SDL_DisplayMode displayMode{};
+        if (SDL_GetCurrentDisplayMode(0, &displayMode) < 0)
+        {
+            fatalError("Failed to get display mode");
+        }
+
+        const uint32_t monitorWidth = displayMode.w;
+        const uint32_t monitorHeight = displayMode.h;
+
+        // Window must cover 85% of the screen.
+        m_dimensions = {
+            .x = static_cast<uint32_t>(monitorWidth * 0.85f),
+            .y = static_cast<uint32_t>(monitorHeight * 0.85f),
+        };
+
+        m_window = SDL_CreateWindow("LunarEngine", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, m_dimensions.x,
+                                    m_dimensions.y, SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
+        if (!m_window)
+        {
+            fatalError("Failed to create SDL2 window.");
+        }
+
+        // Get the window handle.
+        SDL_SysWMinfo wmInfo{};
+        SDL_GetWindowWMInfo(m_window, &wmInfo);
+        m_windowHandle = wmInfo.info.win.window;
+
         init();
 
-        // Main engine loop.
-        std::chrono::high_resolution_clock clock{};
-        std::chrono::high_resolution_clock::time_point previous_frame{};
-
-        bool quit = false;
+        // Main run loop.
+        bool quit{false};
+        SDL_Event event{};
 
         while (!quit)
         {
-            const auto current_frame = clock.now();
-            const float delta_time = std::chrono::duration<float, std::milli>(current_frame - previous_frame).count();
-            previous_frame = current_frame;
-
-            m_event_queue.update();
-
-            while (!m_event_queue.empty())
+            while (SDL_PollEvent(&event))
             {
-                const xwin::Event& event = m_event_queue.front();
-
-                if (event.type == xwin::EventType::Close)
+                if (event.type == SDL_QUIT)
                 {
                     quit = true;
                 }
 
-                m_event_queue.pop();
-            }
-
-            update(delta_time);
-            render();
-        }
-    }
-
-    void Engine::init()
-    {
-        // Get project root directory.
-        std::filesystem::path current_directory = std::filesystem::current_path();
-
-        while (!std::filesystem::exists(current_directory / "LunarEngine"))
-        {
-            if (current_directory.has_parent_path())
-            {
-                current_directory = current_directory.parent_path();
+                const uint8_t* keyboardState = SDL_GetKeyboardState(nullptr);
+                if (keyboardState[SDL_SCANCODE_ESCAPE])
+                {
+                    quit = true;
+                }
             }
         }
+    }
 
-        m_root_directory = (current_directory / "LunarEngine/").string();
-        std::cout << "Root Directory: " << m_root_directory << '\n';
+    void Engine::createDeviceResources()
+    {
+        uint32_t dxgiFactoryFlags = 0u;
 
-        // Create the CrossWindow window and event queue.
-        const xwin::WindowDesc window_desc{
-            .width = m_window_width,
-            .height = m_window_height,
-            .centered = true,
-            .visible = true,
-            .title = "LunarEngine",
-            .name = "EngineWindow",
-        };
-
-        if (!m_window.create(window_desc, m_event_queue))
+        // Set factory flag and get debug interface in debug builds.
+        if constexpr (LUNAR_DEBUG)
         {
-            ErrorMessage(L"Failed to create CrossWindow window.");
+            dxgiFactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
+
+            throwIfFailed(::D3D12GetDebugInterface(IID_PPV_ARGS(&m_debugController)));
+            m_debugController->EnableDebugLayer();
+            m_debugController->SetEnableAutoName(TRUE);
+            m_debugController->SetEnableGPUBasedValidation(TRUE);
         }
 
-        // Create the graphics device.
-        m_graphics_device = std::make_unique<GraphicsDevice>(m_window_width, m_window_height, m_window.getHwnd());
+        throwIfFailed(::CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&m_factory)));
 
-        // Create triangle index buffer.
-        const std::array<uint32_t, 3u> index_buffer_data{0u, 1u, 2u};
-        const D3D11_BUFFER_DESC index_buffer_desc{
-            .ByteWidth = sizeof(uint32_t) * index_buffer_data.size(),
-            .Usage = D3D11_USAGE_IMMUTABLE,
-            .BindFlags = D3D11_BIND_INDEX_BUFFER,
-            .CPUAccessFlags = 0u,
-            .MiscFlags = 0u,
-            .StructureByteStride = 0u,
+        // Create adapter.
+        throwIfFailed(
+            m_factory->EnumAdapterByGpuPreference(0u, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&m_adapter)));
+
+        DXGI_ADAPTER_DESC2 adapterDesc{};
+        throwIfFailed(m_adapter->GetDesc2(&adapterDesc));
+        std::wcout << "Chosen Adapter : " << adapterDesc.Description << '\n';
+
+        throwIfFailed(::D3D12CreateDevice(m_adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&m_device)));
+
+        // In debug build get debug device and setup info queue.
+        if constexpr (LUNAR_DEBUG)
+        {
+            throwIfFailed(m_device.As(&m_debugDevice));
+
+            throwIfFailed(m_device.As(&m_infoQueue));
+            throwIfFailed(m_infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE));
+            throwIfFailed(m_infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE));
+            throwIfFailed(m_infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE));
+        }
+
+        // Create command queues.
+        const D3D12_COMMAND_QUEUE_DESC directCommandQueueDesc{
+            .Type = D3D12_COMMAND_LIST_TYPE_DIRECT,
+            .Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL,
+            .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
+            .NodeMask = 0u,
         };
 
-        m_triangle_index_buffer = m_graphics_device->create_buffer(index_buffer_desc, index_buffer_data.data());
+        throwIfFailed(m_device->CreateCommandQueue(&directCommandQueueDesc, IID_PPV_ARGS(&m_directCommandQueue)));
 
-        // Create the triangle vertex buffer.
-        const std::array<Vertex, 3> vertices{
-            Vertex{Math::XMFLOAT3(-0.5f, -0.5f, 0.0f), Math::XMFLOAT3(1.0f, 0.0f, 0.0f)},
-            Vertex{Math::XMFLOAT3(0.0f, 0.5f, 0.0f), Math::XMFLOAT3(0.0f, 1.0f, 0.0f)},
-            Vertex{Math::XMFLOAT3(0.5f, -0.5f, 0.0f), Math::XMFLOAT3(0.0f, 0.0f, 1.0f)},
+        // Create command allocator.
+        throwIfFailed(
+            m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_commandAllocator)));
+
+        // Create fence.
+        throwIfFailed(m_device->CreateFence(0u, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
+
+        // Create descriptor heaps.
+        const D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc{
+            .Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+            .NumDescriptors = FRAME_COUNT,
+            .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+            .NodeMask = 0u,
         };
 
-        const D3D11_BUFFER_DESC vertex_buffer_desc{
-            .ByteWidth = sizeof(Vertex) * vertices.size(),
-            .Usage = D3D11_USAGE_IMMUTABLE,
-            .BindFlags = D3D11_BIND_VERTEX_BUFFER,
-            .CPUAccessFlags = 0u,
-            .MiscFlags = 0u,
-            .StructureByteStride = 0u,
-        };
-
-        m_triangle_vertex_buffer = m_graphics_device->create_buffer(vertex_buffer_desc, vertices.data());
-
-        // Create triangle constant buffer.
-        const D3D11_BUFFER_DESC constant_buffer_desc{
-            .ByteWidth = sizeof(MVPBuffer),
-            .Usage = D3D11_USAGE_DEFAULT,
-            .BindFlags = D3D11_BIND_CONSTANT_BUFFER,
-            .CPUAccessFlags = 0u,
-            .MiscFlags = 0u,
-            .StructureByteStride = 0u,
-        };
-
-        m_triangle_constant_buffer = m_graphics_device->create_buffer(constant_buffer_desc);
-
-        // Create vertex and pixel shaders.
-        auto vertex_shader_res =
-            m_graphics_device->create_vertex_shader(get_full_asset_path("shaders/HelloTriangle.hlsl"));
-
-        m_triangle_vertex_shader = vertex_shader_res.first;
-        auto vertex_shader_blob = vertex_shader_res.second;
-
-        m_triangle_pixel_shader =
-            m_graphics_device->create_pixel_shader(get_full_asset_path("shaders/HelloTriangle.hlsl"));
-
-        // Create the input layout (i.e tell the GPU how to interpret the Vertex Buffer's).
-        const std::array<D3D11_INPUT_ELEMENT_DESC, 2u> input_element_descs{
-            D3D11_INPUT_ELEMENT_DESC{
-                .SemanticName = "POSITION",
-                .SemanticIndex = 0u,
-                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
-                .InputSlot = 0u,
-                .AlignedByteOffset = D3D11_APPEND_ALIGNED_ELEMENT,
-                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
-                .InstanceDataStepRate = 0u,
-            },
-            D3D11_INPUT_ELEMENT_DESC{
-                .SemanticName = "COLOR",
-                .SemanticIndex = 0u,
-                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
-                .InputSlot = 0u,
-                .AlignedByteOffset = D3D11_APPEND_ALIGNED_ELEMENT,
-                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
-                .InstanceDataStepRate = 0u,
-            },
-        };
-
-        m_input_layout = m_graphics_device->create_input_layout(input_element_descs, vertex_shader_blob.Get());
-
-        // Setup the depth stencil state desc.
-        const D3D11_DEPTH_STENCIL_DESC depth_stencil_state_desc{
-            .DepthEnable = TRUE,
-            .DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL,
-            .DepthFunc = D3D11_COMPARISON_LESS,
-            .StencilEnable = false,
-        };
-
-        m_depth_stencil_state = m_graphics_device->create_depth_stencil_state(depth_stencil_state_desc);
-
-        // Setup rasterizer desc.
-        const D3D11_RASTERIZER_DESC rasterizer_desc{
-            .FillMode = D3D11_FILL_SOLID,
-            .CullMode = D3D11_CULL_BACK,
-            .FrontCounterClockwise = FALSE,
-            .DepthBias = 0,
-            .DepthBiasClamp = 0.0f,
-            .DepthClipEnable = true,
-            .MultisampleEnable = false,
-        };
-        m_rasterizer_state = m_graphics_device->create_rasterizer_state(rasterizer_desc);
+        throwIfFailed(m_device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&m_rtvDescriptorHeap)));
     }
 
-    void Engine::update(const float delta_time)
+    void Engine::createWindowDependentResources(const Uint2 dimensions)
     {
-        static float total_time = 0.0f;
-        total_time += delta_time * 0.5f;
+        // Create swapchain if not created.
+        if (!m_swapchain)
+        {
+            const DXGI_SWAP_CHAIN_DESC1 swapChainDesc{
+                .Width = dimensions.x,
+                .Height = dimensions.y,
+                .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+                .Stereo = FALSE,
+                .SampleDesc = {1u, 0u},
+                .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                .BufferCount = FRAME_COUNT,
+                .Scaling = DXGI_SCALING_NONE,
+                .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                .AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED,
+                .Flags = 0u,
+            };
 
-        const MVPBuffer mvp_buffer_data{
-            .model_matrix = Math::XMMatrixScaling(sin(Math::XMConvertToRadians(total_time)), 1.0f, 1.0f),
+            WRL::ComPtr<IDXGISwapChain1> swapchain{};
+            throwIfFailed(m_factory->CreateSwapChainForHwnd(m_directCommandQueue.Get(), m_windowHandle, &swapChainDesc,
+                                                            nullptr, nullptr, &swapchain));
+            throwIfFailed(swapchain.As(&m_swapchain));
+        }
+        else
+        {
+            // Resize swapchain if function is called when swapchain is already created.
+            throwIfFailed(
+                m_swapchain->ResizeBuffers(FRAME_COUNT, dimensions.x, dimensions.y, DXGI_FORMAT_R8G8B8A8_UNORM, 0u));
+        }
+
+        m_frameIndex = m_swapchain->GetCurrentBackBufferIndex();
+
+        m_scissorRect = {
+            .left = 0l, .top = 0l, .right = static_cast<long>(dimensions.x), .bottom = static_cast<long>(dimensions.y)};
+
+        m_viewport = {
+            .TopLeftX = 0.0f,
+            .TopLeftY = 0.0f,
+            .Width = static_cast<float>(dimensions.x),
+            .Height = static_cast<float>(dimensions.y),
+            .MinDepth = 0.0f,
+            .MaxDepth = 0.0f,
         };
 
-        m_graphics_device->update_subresources(m_triangle_constant_buffer.Get(), &mvp_buffer_data);
-    }
+        // Create RTV's.
+        m_rtvDescriptorHeapSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-    void Engine::render()
-    {
-        static const std::array<float, 4> clear_color{0.0f, 0.0f, 0.0f, 1.0f};
-        static const uint32_t offset = 0u;
-        static const uint32_t stride = sizeof(Vertex);
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
-        WRL::ComPtr<ID3D11RenderTargetView> render_target_view = m_graphics_device->get_render_target_view();
-        WRL::ComPtr<ID3D11DepthStencilView> dsv = m_graphics_device->get_depth_stencil_view();
+        for (const uint32_t i : std::views::iota(0u, FRAME_COUNT))
+        {
+            WRL::ComPtr<ID3D12Resource> backBuffer{};
+            throwIfFailed(m_swapchain->GetBuffer(i, IID_PPV_ARGS(&backBuffer)));
 
-        auto device_context = m_graphics_device->get_device_context();
-
-        device_context->ClearRenderTargetView(render_target_view.Get(), clear_color.data());
-        device_context->ClearDepthStencilView(dsv.Get(), D3D11_CLEAR_DEPTH, 1.0f, 1u);
-
-        device_context->OMSetRenderTargets(1u, render_target_view.GetAddressOf(), dsv.Get());
-        device_context->OMSetDepthStencilState(m_depth_stencil_state.Get(), 0u);
-
-        device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        device_context->IASetInputLayout(m_input_layout.Get());
-        device_context->IASetIndexBuffer(m_triangle_index_buffer.Get(), DXGI_FORMAT_R32_UINT, 0u);
-        device_context->IASetVertexBuffers(0u, 1u, m_triangle_vertex_buffer.GetAddressOf(), &stride, &offset);
-
-        device_context->VSSetShader(m_triangle_vertex_shader.Get(), nullptr, 0u);
-        device_context->VSSetConstantBuffers(0u, 1u, m_triangle_constant_buffer.GetAddressOf());
-
-        device_context->PSSetShader(m_triangle_pixel_shader.Get(), nullptr, 0u);
-        device_context->RSSetViewports(1u, &m_graphics_device->get_viewport());
-        device_context->RSSetState(m_rasterizer_state.Get());
-        device_context->DrawInstanced(3u, 1u, 0u, 0u);
-
-        m_graphics_device->present();
+            m_device->CreateRenderTargetView(backBuffer.Get(), nullptr, rtvHandle);
+            rtvHandle.ptr += m_rtvDescriptorHeapSize;
+        }
     }
 }

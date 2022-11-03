@@ -9,7 +9,7 @@ PointerAlignment: Left
 FixNamespaceComments: false
 AlignTrailingComments: true
 AllowAllParametersOfDeclarationOnNextLine: true
-AllowShortFunctionsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: false
 NamespaceIndentation: All
 AlignAfterOpenBracket: Align
 AlignEscapedNewlines: Left

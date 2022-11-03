@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef _DEBUG
+#ifdef DEF_LUNAR_DEBUG
 constexpr bool LUNAR_DEBUG = true;
 #else
 constexpr bool LUNAR_DEBUG = false;
@@ -21,9 +21,9 @@ constexpr bool LUNAR_DEBUG = false;
 #include <vector>
 
 // DirectX / DXGI includes.
+#include <d3d12.h>
 #include <DirectXMath.h>
-#include <d3d11_4.h>
-#include <d3dcompiler.h>
+#include <dxcapi.h>
 #include <dxgi1_6.h>
 #include <wrl.h>
 
@@ -32,4 +32,7 @@ namespace WRL = Microsoft::WRL;
 namespace Math = DirectX;
 
 // Custom global headers.
+#include "LunarEngine/d3dx12.hpp"
+
+#include "LunarEngine/PrimitiveTypes.hpp"
 #include "LunarEngine/Utils.hpp"
