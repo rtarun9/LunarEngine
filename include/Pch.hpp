@@ -19,20 +19,20 @@ constexpr bool LUNAR_DEBUG = false;
 #include <string>
 #include <string_view>
 #include <vector>
+#include <source_location>
+#include <format>
 
-// DirectX / DXGI includes.
-#include <d3d12.h>
+// Vulkan includes.
+#define VULKAN_HPP_NO_CONSTRUCTORS
+#include <vulkan/vulkan.hpp>
+#include <vk_mem_alloc.hpp>
+
+// Math includes.
 #include <DirectXMath.h>
-#include <dxcapi.h>
-#include <dxgi1_6.h>
-#include <wrl.h>
-
-// Global alias for Microsoft::WRL::ComPtr<T> and DirectX (used by DirectXMath).
-namespace WRL = Microsoft::WRL;
-namespace Math = DirectX;
 
 // Custom global headers.
-#include "LunarEngine/d3dx12.hpp"
-
 #include "LunarEngine/PrimitiveTypes.hpp"
 #include "LunarEngine/Utils.hpp"
+
+// Global aliases
+namespace math = DirectX;

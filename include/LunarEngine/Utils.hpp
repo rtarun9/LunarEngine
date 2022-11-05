@@ -1,51 +1,19 @@
 #pragma once
 
-inline void fatalError(const std::string_view message)
+inline void fatalError(const std::string_view message, const std::source_location source_location = std::source_location::current())
 {
-    throw std::runtime_error(message.data());
+    const std::string errorMessage =
+        message.data() +
+        std::format(" Source Location data : File Name -> {}, Function Name -> {}, Line Number -> {}, Column -> {}", source_location.file_name(), source_location.function_name(), source_location.line(), source_location.column());
+
+    throw std::runtime_error(errorMessage.data());
 }
 
-inline std::string hresultToString(const HRESULT hr)
+inline void vkCheck(const vk::Result& result)
 {
-    char str[128]{};
-    sprintf_s(str, "HRESULT : 0x%08X", static_cast<UINT>(hr));
-    return std::string(str);
-}
-
-inline void throwIfFailed(const HRESULT hr)
-{
-    if (FAILED(hr))
+    if (result != vk::Result::eSuccess)
     {
-        throw std::runtime_error(hresultToString(hr));
+        throw std::runtime_error(vk::to_string(result));
     }
 }
 
-inline std::wstring stringToWstring(const std::string_view inputString)
-{
-    std::wstring result{};
-    const std::string input{inputString};
-
-    const int32_t length = MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, NULL, 0);
-    if (length > 0)
-    {
-        result.resize(size_t(length) - 1);
-        MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, result.data(), length);
-    }
-
-    return std::move(result);
-}
-
-inline std::string wstringToString(const std::wstring_view inputWString)
-{
-    std::string result{};
-    const std::wstring input{inputWString};
-
-    const int32_t length = WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, NULL, 0, NULL, NULL);
-    if (length > 0)
-    {
-        result.resize(size_t(length) - 1);
-        WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, result.data(), length, NULL, NULL);
-    }
-
-    return std::move(result);
-}

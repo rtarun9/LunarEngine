@@ -1,36 +1,36 @@
-BasedOnStyle: Microsoft
-IndentWidth: 4
-TabWidth: 4
-Language: Cpp
-UseTab: Never
-Cpp11BracedListStyle: true
-IndentWrappedFunctionNames: true
-PointerAlignment: Left
-FixNamespaceComments: false
-AlignTrailingComments: true
-AllowAllParametersOfDeclarationOnNextLine: true
-AllowShortFunctionsOnASingleLine: false
-NamespaceIndentation: All
+
+---
 AlignAfterOpenBracket: Align
 AlignEscapedNewlines: Left
-BreakConstructorInitializers: BeforeColon
-IndentCaseLabels: 'false'
-SpaceBeforeCpp11BracedList: 'false'
-SpaceBeforeCtorInitializerColon: 'true'
-AlignEscapedNewlines: Left
-PointerAlignment: Left
+AlignTrailingComments: true
+AlignOperands: 'true'
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowShortFunctionsOnASingleLine: true
+AllowAllArgumentsOnNextLine: 'false'
+BasedOnStyle: Microsoft
+BinPackArguments: false
+BinPackParameters: false
 BreakBeforeBraces: Allman
-
-BraceWrapping:
-  AfterClass:      true
-  AfterControlStatement: true
-  AfterEnum:       true
-  AfterExternBlock: true
-  AfterFunction:   true
-  AfterNamespace:  true
-  AfterObjCDeclaration: true
-  AfterStruct:     true
-  AfterUnion:      true
-  BeforeCatch:     true
-  BeforeElse:      true
-  IndentBraces:    true
+BreakConstructorInitializers: BeforeColon
+ColumnLimit: '120'
+CompactNamespaces: true
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+Cpp11BracedListStyle: true
+FixNamespaceComments: false
+IndentCaseBlocks: true
+IndentCaseLabels: true
+IndentExternBlock: Indent
+IndentGotoLabels: false
+IndentRequires: false
+IndentWidth: 4
+IndentWrappedFunctionNames: true
+InsertTrailingCommas: None
+Language: Cpp
+NamespaceIndentation: All
+PointerAlignment: Left
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: true
+SpacesInAngles: 'false'
+TabWidth: 4
+UseTab: Never
+...
