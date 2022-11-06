@@ -3,7 +3,7 @@
 struct SDL_Window;
 
 namespace lunar
-{
+{    
     class Engine
     {
       public:
@@ -14,9 +14,14 @@ namespace lunar
 
       private:
         void initVulkan();
+        void initPipelines();
+
         void render();
 
         void cleanup();
+
+      private:
+        vk::ShaderModule createShaderModule(const std::string_view shaderPath);
 
       public:
         static constexpr uint32_t FRAME_COUNT = 3u;
@@ -25,6 +30,8 @@ namespace lunar
         SDL_Window* m_window{};
         vk::Extent2D m_windowExtent{};
         uint64_t m_frameNumber{};
+
+        std::string m_rootDirectory{};
 
         // Core vulkan structures.
         vk::Instance m_instance{};
@@ -45,11 +52,11 @@ namespace lunar
         vk::CommandPool m_commandPool{};
         vk::CommandBuffer m_commandBuffer{};
 
-        vk::RenderPass m_renderPass{};
-        std::vector<vk::Framebuffer> m_framebuffers{};
-
         vk::Semaphore m_presentationSemaphore{};
         vk::Semaphore m_renderSemaphore{};
         vk::Fence m_renderFence{};
+
+        vk::PipelineLayout m_trianglePipelineLayout{};
+        vk::Pipeline m_trianglePipeline{};
     };
 }

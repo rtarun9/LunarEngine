@@ -21,6 +21,7 @@ constexpr bool LUNAR_DEBUG = false;
 #include <vector>
 #include <source_location>
 #include <format>
+#include <fstream>
 
 // Vulkan includes.
 #define VULKAN_HPP_NO_CONSTRUCTORS

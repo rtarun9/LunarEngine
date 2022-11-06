@@ -2,3 +2,4 @@ build/
 .vs/
 out/
 cmake-build-debug/
+*.cso
