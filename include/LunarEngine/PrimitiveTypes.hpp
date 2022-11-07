@@ -2,7 +2,6 @@
 
 // Common datatypes.
 
-
 // Aliases for primitive types and useful flags / values used throughout the project.
 static constexpr uint8_t INVALID_U8 = -1;
 static constexpr uint16_t INVALID_U16 = -1;

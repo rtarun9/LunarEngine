@@ -17,3 +17,11 @@ inline void vkCheck(const vk::Result& result)
     }
 }
 
+inline void vkCheck(const VkResult& result)
+{
+    if (result != VK_SUCCESS)
+    {
+        const vk::Result res = vk::Result(result);
+        throw std::runtime_error(vk::to_string(res));
+    }
+}

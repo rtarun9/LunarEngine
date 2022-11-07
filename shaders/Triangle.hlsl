@@ -1,26 +1,28 @@
+struct VertexInput
+{
+    [[vk::location(0)]] float3 position : POSITION;
+    [[vk::location(1)]] float3 normal : NORMAL;
+    [[vk::location(2)]] float3 color : COLOR;
+};
+
 struct VsOutput
 {
     float4 position : SV_Position;
     float3 color : COLOR;
 };
 
-VsOutput VsMain(uint vertexID : SV_VertexID)
+struct TransformData
 {
-    const float3 VERTEX_POSITIONS[3] = {
-        float3(-0.5f, 0.5f, 0.0f),
-        float3(0.0f, -0.5f, 0.0f),
-        float3(-0.5f, 0.5f, 0.0f),
-    };
+    row_major matrix modelMatrix;
+};
 
-    const float3 VERTEX_COLORS[3] = {
-        float3(1.0f, 0.0f, 0.0f),
-        float3(0.0f, 1.0f, 0.0f),
-        float3(0.0f, 0.0f, 1.0f),
-    };
+[[vk::push_constant]] ConstantBuffer<TransformData> transformBuffer : register(b0);
 
+VsOutput VsMain(VertexInput input)
+{
     VsOutput output;
-    output.position = float4(VERTEX_POSITIONS[vertexID], 1.0f);
-    output.color = VERTEX_COLORS[vertexID];
+    output.position = mul(float4(input.position, 1.0f), transformBuffer.modelMatrix);
+    output.color = input.color;
 
     return output;
 }

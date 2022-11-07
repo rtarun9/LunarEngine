@@ -6,6 +6,9 @@
 
 #include <VkBootstrap.h>
 
+#define VMA_IMPLEMENTATION
+#include <vk_mem_alloc.hpp>
+
 namespace lunar
 {
     void Engine::init()
@@ -67,6 +70,9 @@ namespace lunar
 
         // Setup the pipelines.
         initPipelines();
+
+        // Initialize all meshes.
+        initMeshes();
     }
 
     void Engine::initVulkan()
@@ -91,13 +97,20 @@ namespace lunar
         const vkb::Instance vkbInstance = vkbInstanceResult.value();
         m_instance = vkbInstance.instance;
 
+        m_deletionQueue.pushFunction([&]() { vkDestroyInstance(m_instance, nullptr); });
+
         // Get the debug messenger.
         m_debugMessenger = vkbInstance.debug_messenger;
+
+        m_deletionQueue.pushFunction([&]()
+                                     { vkb::destroy_debug_utils_messenger(m_instance, m_debugMessenger, nullptr); });
 
         // Get the surface of the window opened by SDL (i.e get the underlying native platform surface).
         VkSurfaceKHR surface{};
         SDL_Vulkan_CreateSurface(m_window, m_instance, &surface);
         m_surface = surface;
+
+        m_deletionQueue.pushFunction([&]() { m_instance.destroySurfaceKHR(m_surface); });
 
         // Specify that we require Vulkan 1.3's dynamic rendering feature.
         const vk::PhysicalDeviceVulkan13Features features{
@@ -126,6 +139,8 @@ namespace lunar
 
         m_device = vkbDevice.device;
 
+        m_deletionQueue.pushFunction([&]() { m_device.destroy(); });
+
         // Initialize the swapchain and get the swapchain images and image views.
         // Swapchain provides ability to store and render the rendering results to a surface.
         vkb::SwapchainBuilder vkbSwapchainBuilder{vkbPhysicalDevice, vkbDevice, m_surface};
@@ -152,6 +167,11 @@ namespace lunar
             m_swapchainImageViews.emplace_back(swapchainImageView);
         }
 
+        for (const auto& swapchainImageView : m_swapchainImageViews)
+        {
+            m_deletionQueue.pushFunction([&]() { m_device.destroyImageView(swapchainImageView); });
+        }
+
         m_swapchainImageFormat = vk::Format(vkbSwapchain.image_format);
 
         // Get the command queue and family (i.e type of queue).
@@ -168,6 +188,7 @@ namespace lunar
         };
 
         m_commandPool = m_device.createCommandPool(commandPoolCreateInfo);
+        m_deletionQueue.pushFunction([&]() { m_device.destroyCommandPool(m_commandPool); });
 
         // Create the command buffer.
 
@@ -187,11 +208,25 @@ namespace lunar
         const vk::FenceCreateInfo fenceCreateInfo = {.flags = vk::FenceCreateFlagBits::eSignaled};
 
         m_renderFence = m_device.createFence(fenceCreateInfo);
+        m_deletionQueue.pushFunction([&]() { m_device.destroyFence(m_renderFence); });
 
         // Create semaphores (GPU - GPU sync).
         const vk::SemaphoreCreateInfo semaphoreCreateInfo = {};
         m_renderSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
         m_presentationSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
+
+        m_deletionQueue.pushFunction([&]() { m_device.destroySemaphore(m_renderSemaphore); });
+        m_deletionQueue.pushFunction([&]() { m_device.destroySemaphore(m_presentationSemaphore); });
+
+        // Initialize the vulkan memory allocator.
+        const VmaAllocatorCreateInfo vmaAllocatorCreateInfo = {
+            .physicalDevice = m_physicalDevice,
+            .device = m_device,
+            .instance = m_instance,
+        };
+
+        vkCheck(vmaCreateAllocator(&vmaAllocatorCreateInfo, &m_vmaAllocator));
+        m_deletionQueue.pushFunction([&]() { vmaDestroyAllocator(m_vmaAllocator); });
     }
 
     void Engine::initPipelines()
@@ -214,7 +249,42 @@ namespace lunar
         };
 
         // Setup input state.
-        const vk::PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = {};
+
+        // Vertex buffer will have float3 position, float3 normal, and float3 color for now.
+        const vk::VertexInputBindingDescription mainVertexInputBindingDescription = {
+            .binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = vk::VertexInputRate::eVertex,
+        };
+
+        const std::array<vk::VertexInputAttributeDescription, 3> vertexInputAttributeDescriptions = {
+            vk::VertexInputAttributeDescription{
+                .location = 0,
+                .binding = 0,
+                .format = vk::Format::eR32G32B32Sfloat,
+                .offset = offsetof(Vertex, position),
+            },
+
+            vk::VertexInputAttributeDescription{
+                .location = 1,
+                .binding = 0,
+                .format = vk::Format::eR32G32B32Sfloat,
+                .offset = offsetof(Vertex, normal),
+            },
+            vk::VertexInputAttributeDescription{
+                .location = 2,
+                .binding = 0,
+                .format = vk::Format::eR32G32B32Sfloat,
+                .offset = offsetof(Vertex, color),
+            },
+        };
+
+        const vk::PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = {
+            .vertexBindingDescriptionCount = 1u,
+            .pVertexBindingDescriptions = &mainVertexInputBindingDescription,
+            .vertexAttributeDescriptionCount = 3u,
+            .pVertexAttributeDescriptions = vertexInputAttributeDescriptions.data(),
+        };
 
         // Setup primitive topology.
         const vk::PipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo = {
@@ -230,6 +300,7 @@ namespace lunar
             .cullMode = vk::CullModeFlagBits::eNone,
             .frontFace = vk::FrontFace::eClockwise,
             .depthBiasEnable = false,
+            .lineWidth = 1.0f,
         };
 
         // Setup default multisample state.
@@ -249,12 +320,13 @@ namespace lunar
             .pAttachments = &colorBlendAttachmentState,
         };
 
-        // Setup viewport and scissor state.
+        // Setup viewport and scissor state (y is the bottom left, and height is -1 * actual height to replicate
+        // DirectX's coordinate system).
         const vk::Viewport viewport = {
             .x = 0.0f,
-            .y = 0.0f,
+            .y = static_cast<float>(m_windowExtent.height),
             .width = static_cast<float>(m_windowExtent.width),
-            .height = static_cast<float>(m_windowExtent.height),
+            .height = -1 * static_cast<float>(m_windowExtent.height),
             .minDepth = 0.0f,
             .maxDepth = 1.0f,
         };
@@ -271,8 +343,20 @@ namespace lunar
             .pScissors = &scissor,
         };
 
-        // Create empty pipeline layout.
-        m_trianglePipelineLayout = m_device.createPipelineLayout({});
+        // Create pipeline layout.
+        const vk::PushConstantRange pushConstant = {
+            .stageFlags = vk::ShaderStageFlagBits::eVertex,
+            .offset = 0u,
+            .size = sizeof(TransformBuffer),
+        };
+
+        const vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo = {
+            .pushConstantRangeCount = 1u,
+            .pPushConstantRanges = &pushConstant,
+        };
+
+        m_trianglePipelineLayout = m_device.createPipelineLayout(pipelineLayoutCreateInfo);
+        m_deletionQueue.pushFunction([&]() { m_device.destroyPipelineLayout(m_trianglePipelineLayout); });
 
         // Create the pipeline.
         const std::vector<vk::PipelineShaderStageCreateInfo> shaderStages = {
@@ -306,6 +390,53 @@ namespace lunar
         vkCheck(trianglePipelineResult.result);
 
         m_trianglePipeline = trianglePipelineResult.value;
+        m_deletionQueue.pushFunction([&]() { m_device.destroyPipeline(m_trianglePipeline); });
+
+        // Destroy shader modules.
+        m_device.destroyShaderModule(triangleVertexShaderModule);
+        m_device.destroyShaderModule(trianglePixelShaderModule);
+    }
+
+    void Engine::initMeshes()
+    {
+        m_triangleMesh.vertices.resize(3);
+
+        m_triangleMesh.vertices[0] = Vertex{.position = {-0.5f, -0.5f, 0.0f}, .color = {1.0f, 0.0f, 0.0f}};
+        m_triangleMesh.vertices[1] = Vertex{.position = {0.0f, 0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}};
+        m_triangleMesh.vertices[2] = Vertex{.position = {0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}};
+
+        // Create a vertex buffer for this mesh.
+        const vk::BufferCreateInfo vertexBufferCreateInfo = {
+            .size = sizeof(Vertex) * m_triangleMesh.vertices.size(),
+            .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+        };
+
+        // The buffer is writable by the CPU and readable by the GPU.
+        const VmaAllocationCreateInfo vmaAllocationCreateInfo{.usage = VMA_MEMORY_USAGE_CPU_TO_GPU};
+
+        const VkBufferCreateInfo vkBufferCreateInfo = static_cast<VkBufferCreateInfo>(vertexBufferCreateInfo);
+        VkBuffer vkBuffer{};
+
+        // Allocate the buffer.
+        vkCheck(vmaCreateBuffer(m_vmaAllocator,
+                                &vkBufferCreateInfo,
+                                &vmaAllocationCreateInfo,
+                                &vkBuffer,
+                                &m_triangleMesh.vertexBuffer.allocation,
+                                nullptr));
+
+        void* data{};
+        vmaMapMemory(m_vmaAllocator, m_triangleMesh.vertexBuffer.allocation, &data);
+        std::memcpy(data, m_triangleMesh.vertices.data(), m_triangleMesh.vertices.size() * sizeof(Vertex));
+        vmaUnmapMemory(m_vmaAllocator, m_triangleMesh.vertexBuffer.allocation);
+
+        m_triangleMesh.vertexBuffer.buffer = vkBuffer;
+        m_deletionQueue.pushFunction(
+            [&]()
+            {
+                vmaDestroyBuffer(m_vmaAllocator, vkBuffer, m_triangleMesh.vertexBuffer.allocation);
+                m_device.destroyBuffer(m_triangleMesh.vertexBuffer.buffer);
+            });
     }
 
     void Engine::run()
@@ -372,7 +503,7 @@ namespace lunar
         cmd.begin(commandBufferBeginInfo);
 
         const vk::ClearValue clearValue = {
-            .color = {std::array{0.0f, 0.0f, abs(sin(m_frameNumber / 120.0f)), 1.0f}},
+            .color = {std::array{0.0f, 0.0f, 0.0f, 1.0f}},
         };
 
         // Start rendering.
@@ -425,7 +556,19 @@ namespace lunar
 
         cmd.beginRendering(renderingInfo);
 
+        // Setup push constant data.
+        const TransformBuffer transformBufferData = {
+            .modelMatrix = math::XMMatrixRotationZ(m_frameNumber * 0.01f),
+        };
+
+        const vk::DeviceSize vertexBufferOffset = 0;
+        cmd.bindVertexBuffers(0u, m_triangleMesh.vertexBuffer.buffer, vertexBufferOffset);
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_trianglePipeline);
+        cmd.pushConstants(m_trianglePipelineLayout,
+                          vk::ShaderStageFlagBits::eVertex,
+                          0,
+                          sizeof(TransformBuffer),
+                          &transformBufferData);
 
         cmd.draw(3u, 1u, 0u, 0u);
 
@@ -484,28 +627,10 @@ namespace lunar
 
     void Engine::cleanup()
     {
-        // Cleanup is done in the reverse order of creation.
-
+        // Cleanup is done in the reverse order of creation. Handled by deletion queue.
         m_device.waitIdle();
 
-        m_device.destroyFence(m_renderFence);
-        m_device.destroySemaphore(m_renderSemaphore);
-        m_device.destroySemaphore(m_presentationSemaphore);
-
-        m_device.destroyCommandPool(m_commandPool);
-
-        m_device.destroySwapchainKHR(m_swapchain);
-
-        for (const uint32_t i : std::views::iota(0u, m_swapchainImageCount))
-        {
-            m_device.destroyImageView(m_swapchainImageViews[i]);
-        }
-
-        m_device.destroy();
-
-        vkb::destroy_debug_utils_messenger(m_instance, m_debugMessenger);
-        m_instance.destroySurfaceKHR(m_surface);
-        m_instance.destroy();
+        m_deletionQueue.flush();
     }
 
     vk::ShaderModule Engine::createShaderModule(const std::string_view shaderPath)

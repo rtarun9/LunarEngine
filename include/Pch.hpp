@@ -15,6 +15,8 @@ constexpr bool LUNAR_DEBUG = false;
 #include <iostream>
 #include <filesystem>
 #include <ranges>
+#include <queue>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>

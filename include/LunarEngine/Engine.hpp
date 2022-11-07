@@ -1,9 +1,11 @@
 #pragma once
 
+#include "Resources.hpp"
+
 struct SDL_Window;
 
 namespace lunar
-{    
+{
     class Engine
     {
       public:
@@ -15,6 +17,7 @@ namespace lunar
       private:
         void initVulkan();
         void initPipelines();
+        void initMeshes();
 
         void render();
 
@@ -32,6 +35,7 @@ namespace lunar
         uint64_t m_frameNumber{};
 
         std::string m_rootDirectory{};
+        DeletionQueue m_deletionQueue{};
 
         // Core vulkan structures.
         vk::Instance m_instance{};
@@ -56,7 +60,11 @@ namespace lunar
         vk::Semaphore m_renderSemaphore{};
         vk::Fence m_renderFence{};
 
+        VmaAllocator m_vmaAllocator{};
+
         vk::PipelineLayout m_trianglePipelineLayout{};
         vk::Pipeline m_trianglePipeline{};
+
+        Mesh m_triangleMesh{};
     };
 }
