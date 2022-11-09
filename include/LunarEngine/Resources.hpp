@@ -2,6 +2,17 @@
 
 namespace lunar
 {
+    // Dump of all data types here. Will be moved into the correct headers soon to make it more organized.
+    struct FrameData
+    {
+        vk::Fence renderFence {};
+        vk::Semaphore renderSemaphore{};
+        vk::Semaphore presentationSemaphore{};
+
+        vk::CommandPool graphicsCommandPool {};
+        vk::CommandBuffer graphicsCommandBuffer{};
+    };
+
     struct Vertex
     {
         math::XMFLOAT3 position{};

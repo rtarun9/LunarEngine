@@ -113,12 +113,12 @@ namespace lunar
         const vkb::Instance vkbInstance = vkbInstanceResult.value();
         m_instance = vkbInstance.instance;
 
-        m_deletionQueue.pushFunction([&]() { vkDestroyInstance(m_instance, nullptr); });
+        m_deletionQueue.pushFunction([=]() { vkDestroyInstance(m_instance, nullptr); });
 
         // Get the debug messenger.
         m_debugMessenger = vkbInstance.debug_messenger;
 
-        m_deletionQueue.pushFunction([&]()
+        m_deletionQueue.pushFunction([=]()
                                      { vkb::destroy_debug_utils_messenger(m_instance, m_debugMessenger, nullptr); });
 
         // Get the surface of the window opened by SDL (i.e get the underlying native platform surface).
@@ -126,7 +126,7 @@ namespace lunar
         SDL_Vulkan_CreateSurface(m_window, m_instance, &surface);
         m_surface = surface;
 
-        m_deletionQueue.pushFunction([&]() { m_instance.destroySurfaceKHR(m_surface); });
+        m_deletionQueue.pushFunction([=]() { m_instance.destroySurfaceKHR(m_surface); });
 
         // Specify that we require Vulkan 1.3's dynamic rendering feature.
         const vk::PhysicalDeviceVulkan13Features features{
@@ -155,7 +155,7 @@ namespace lunar
 
         m_device = vkbDevice.device;
 
-        m_deletionQueue.pushFunction([&]() { m_device.destroy(); });
+        m_deletionQueue.pushFunction([=]() { m_device.destroy(); });
 
         // Initialize the swapchain and get the swapchain images and image views.
         // Swapchain provides ability to store and render the rendering results to a surface.
@@ -185,7 +185,7 @@ namespace lunar
 
         for (const auto& swapchainImageView : m_swapchainImageViews)
         {
-            m_deletionQueue.pushFunction([&]() { m_device.destroyImageView(swapchainImageView); });
+            m_deletionQueue.pushFunction([=]() { m_device.destroyImageView(swapchainImageView); });
         }
 
         m_swapchainImageFormat = vk::Format(vkbSwapchain.image_format);
@@ -197,29 +197,34 @@ namespace lunar
         m_transferQueue = vkbDevice.get_queue(vkb::QueueType::transfer).value();
         m_transferQueueIndex = vkbDevice.get_queue_index(vkb::QueueType::transfer).value();
 
-        // Create the command pool.
+        // Create the command pools.
 
-        // Specify that we much be able to reset individual command buffers created from this pool.
-        // also, the commands recorded must be compatible with the graphics queue.
-        const vk::CommandPoolCreateInfo commandPoolCreateInfo = {
-            .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-            .queueFamilyIndex = m_graphicsQueueIndex,
-        };
+        for (const uint32_t frameIndex : std::views::iota(0u, FRAME_COUNT))
+        {
+            // Specify that we much be able to reset individual command buffers created from this pool.
+            // also, the commands recorded must be compatible with the graphics queue.
+            const vk::CommandPoolCreateInfo commandPoolCreateInfo = {
+                .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                .queueFamilyIndex = m_graphicsQueueIndex,
+            };
 
-        m_commandPool = m_device.createCommandPool(commandPoolCreateInfo);
-        m_deletionQueue.pushFunction([&]() { m_device.destroyCommandPool(m_commandPool); });
+            m_frameData[frameIndex].graphicsCommandPool = m_device.createCommandPool(commandPoolCreateInfo);
+            m_deletionQueue.pushFunction([=]()
+                                         { m_device.destroyCommandPool(m_frameData[frameIndex].graphicsCommandPool); });
 
-        // Create the command buffer.
+            // Create the command buffer.
 
-        // Specify it is primarily, implying it can be sent for execution on a queue. Secondary buffers act as
-        // subcommands to a primary buffer.
-        const vk::CommandBufferAllocateInfo commandBufferAllocateInfo = {
-            .commandPool = m_commandPool,
-            .level = vk::CommandBufferLevel::ePrimary,
-            .commandBufferCount = 1u,
-        };
+            // Specify it is primarily, implying it can be sent for execution on a queue. Secondary buffers act as
+            // subcommands to a primary buffer.
+            const vk::CommandBufferAllocateInfo commandBufferAllocateInfo = {
+                .commandPool = m_frameData[frameIndex].graphicsCommandPool,
+                .level = vk::CommandBufferLevel::ePrimary,
+                .commandBufferCount = 1u,
+            };
 
-        m_commandBuffer = m_device.allocateCommandBuffers(commandBufferAllocateInfo).at(0);
+            m_frameData[frameIndex].graphicsCommandBuffer =
+                m_device.allocateCommandBuffers(commandBufferAllocateInfo).at(0);
+        }
 
         // Create command buffer and command pool but for transfer queue.
         const vk::CommandPoolCreateInfo transferCommandPoolCreateInfo = {
@@ -228,7 +233,7 @@ namespace lunar
         };
 
         m_transferCommandPool = m_device.createCommandPool(transferCommandPoolCreateInfo);
-        m_deletionQueue.pushFunction([&]() { m_device.destroyCommandPool(m_transferCommandPool); });
+        m_deletionQueue.pushFunction([=]() { m_device.destroyCommandPool(m_transferCommandPool); });
 
         const vk::CommandBufferAllocateInfo transferCommandPoolAllocateInfo = {
             .commandPool = m_transferCommandPool,
@@ -243,20 +248,23 @@ namespace lunar
         // Base case for the first loop (CPU - GPU sync).
         const vk::FenceCreateInfo fenceCreateInfo = {.flags = vk::FenceCreateFlagBits::eSignaled};
 
-        m_renderFence = m_device.createFence(fenceCreateInfo);
-        m_deletionQueue.pushFunction([&]() { m_device.destroyFence(m_renderFence); });
+        for (const uint32_t frameIndex : std::views::iota(0u, FRAME_COUNT))
+        {
+            m_frameData[frameIndex].renderFence = m_device.createFence(fenceCreateInfo);
+            m_deletionQueue.pushFunction([=]() { m_device.destroyFence(m_frameData[frameIndex].renderFence); });
 
-        // Create semaphores (GPU - GPU sync).
-        const vk::SemaphoreCreateInfo semaphoreCreateInfo = {};
-        m_renderSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
-        m_presentationSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
+            // Create semaphores (GPU - GPU sync).
+            const vk::SemaphoreCreateInfo semaphoreCreateInfo = {};
+            m_frameData[frameIndex].renderSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
+            m_frameData[frameIndex].presentationSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
 
-        m_deletionQueue.pushFunction(
-            [&]()
-            {
-                m_device.destroySemaphore(m_renderSemaphore);
-                m_device.destroySemaphore(m_presentationSemaphore);
-            });
+            m_deletionQueue.pushFunction(
+                [=]()
+                {
+                    m_device.destroySemaphore(m_frameData[frameIndex].renderSemaphore);
+                    m_device.destroySemaphore(m_frameData[frameIndex].presentationSemaphore);
+                });
+        }
 
         // Initialize the vulkan memory allocator.
         const VmaAllocatorCreateInfo vmaAllocatorCreateInfo = {
@@ -266,53 +274,56 @@ namespace lunar
         };
 
         vkCheck(vmaCreateAllocator(&vmaAllocatorCreateInfo, &m_vmaAllocator));
-        m_deletionQueue.pushFunction([&]() { vmaDestroyAllocator(m_vmaAllocator); });
+        m_deletionQueue.pushFunction([=]() { vmaDestroyAllocator(m_vmaAllocator); });
     }
 
     void Engine::initPipelines()
     {
-        const vk::Extent3D depthTextureExtent = {
+        // Create the depth texture for use by the pipeline.
+        const vk::Extent3D depthImageExtent = {
             .width = m_windowExtent.width,
             .height = m_windowExtent.height,
             .depth = 1,
         };
 
-        // Create the depth texture for use by the pipeline.
-        const vk::ImageCreateInfo depthTextureCreateInfo = {
+        // We do not intend to read the image from the CPU, so we use tilingOptimal to let the GPU decide the optimal
+        // way to arrange the texture in the GPU.
+        const vk::ImageCreateInfo depthImageCreateInfo = {
             .imageType = vk::ImageType::e2D,
-            .format = m_depthTextureFormat,
-            .extent = depthTextureExtent,
+            .format = m_depthImageFormat,
+            .extent = depthImageExtent,
             .mipLevels = 1u,
             .arrayLayers = 1u,
+            .tiling = vk::ImageTiling::eOptimal,
             .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
         };
 
-        VmaAllocationCreateInfo vmaDepthTextureAllocationCreateInfo = {
+        const VmaAllocationCreateInfo vmaDepthImageAllocationCreateInfo = {
             .usage = VMA_MEMORY_USAGE_GPU_ONLY,
         };
 
-        const VkImageCreateInfo vkDepthTextureImageCreateInfo = depthTextureCreateInfo;
+        const VkImageCreateInfo vkDepthImageCreateInfo = depthImageCreateInfo;
 
-        VkImage vkDepthTextureImage{};
+        VkImage vkDepthImage{};
         vkCheck(vmaCreateImage(m_vmaAllocator,
-                               &vkDepthTextureImageCreateInfo,
-                               &vmaDepthTextureAllocationCreateInfo,
-                               &vkDepthTextureImage,
-                               &m_depthTexture.allocation,
+                               &vkDepthImageCreateInfo,
+                               &vmaDepthImageAllocationCreateInfo,
+                               &vkDepthImage,
+                               &m_depthImage.allocation,
                                nullptr));
-        m_depthTexture.image = vkDepthTextureImage;
+        m_depthImage.image = vkDepthImage;
 
         m_deletionQueue.pushFunction(
-            [&]()
+            [=]()
             {
-                const VkImage vkDepthImage = m_depthTexture.image;
-                vmaDestroyImage(m_vmaAllocator, vkDepthImage, m_depthTexture.allocation);
+                const VkImage vkDepthImage = m_depthImage.image;
+                vmaDestroyImage(m_vmaAllocator, vkDepthImage, m_depthImage.allocation);
             });
 
-        const vk::ImageViewCreateInfo depthTextureImageViewCreateInfo = {
-            .image = m_depthTexture.image,
+        const vk::ImageViewCreateInfo depthImageViewCreateInfo = {
+            .image = m_depthImage.image,
             .viewType = vk::ImageViewType::e2D,
-            .format = m_depthTextureFormat,
+            .format = m_depthImageFormat,
             .subresourceRange =
                 {
                     .aspectMask = vk::ImageAspectFlagBits::eDepth,
@@ -324,8 +335,8 @@ namespace lunar
         };
 
         // Create depth texture image view.
-        m_depthTextureView = m_device.createImageView(depthTextureImageViewCreateInfo);
-        m_deletionQueue.pushFunction([&]() { m_device.destroyImageView(m_depthTextureView); });
+        m_depthImageView = m_device.createImageView(depthImageViewCreateInfo);
+        m_deletionQueue.pushFunction([=]() { m_device.destroyImageView(m_depthImageView); });
 
         // Create shader modules.
         const vk::ShaderModule triangleVertexShaderModule = createShaderModule("shaders/TriangleVS.cso");
@@ -400,6 +411,14 @@ namespace lunar
             .lineWidth = 1.0f,
         };
 
+        // Setup depth stencil state.
+        const vk::PipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {
+            .depthTestEnable = true,
+            .depthWriteEnable = true,
+            .depthCompareOp = vk::CompareOp::eLessOrEqual,
+            .stencilTestEnable = false,
+        };
+
         // Setup default multisample state.
         const vk::PipelineMultisampleStateCreateInfo multisampleStateCreateInfo = {};
 
@@ -453,7 +472,7 @@ namespace lunar
         };
 
         m_pipelineLayout = m_device.createPipelineLayout(pipelineLayoutCreateInfo);
-        m_deletionQueue.pushFunction([&]() { m_device.destroyPipelineLayout(m_pipelineLayout); });
+        m_deletionQueue.pushFunction([=]() { m_device.destroyPipelineLayout(m_pipelineLayout); });
 
         // Create the pipeline.
         const std::vector<vk::PipelineShaderStageCreateInfo> shaderStages = {
@@ -464,6 +483,7 @@ namespace lunar
         const vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo = {
             .colorAttachmentCount = 1u,
             .pColorAttachmentFormats = &m_swapchainImageFormat,
+            .depthAttachmentFormat = m_depthImageFormat,
         };
 
         const vk::GraphicsPipelineCreateInfo triangleGraphicsPIpelineStateCreateInfo = {
@@ -475,7 +495,7 @@ namespace lunar
             .pViewportState = &viewportStateCreateInfo,
             .pRasterizationState = &rasterizationStateCreateInfo,
             .pMultisampleState = &multisampleStateCreateInfo,
-            .pDepthStencilState = nullptr,
+            .pDepthStencilState = &depthStencilStateCreateInfo,
             .pColorBlendState = &colorBlendStateCreateInfo,
             .pDynamicState = nullptr,
             .layout = m_pipelineLayout,
@@ -487,7 +507,7 @@ namespace lunar
         vkCheck(trianglePipelineResult.result);
 
         m_pipeline = trianglePipelineResult.value;
-        m_deletionQueue.pushFunction([&]() { m_device.destroyPipeline(m_pipeline); });
+        m_deletionQueue.pushFunction([=]() { m_device.destroyPipeline(m_pipeline); });
 
         // Destroy shader modules.
         m_device.destroyShaderModule(triangleVertexShaderModule);
@@ -508,20 +528,7 @@ namespace lunar
         };
 
         m_triangleMesh.vertexBuffer = createGPUBuffer(vertexBufferCreateInfo, m_triangleMesh.vertices.data());
-        m_deletionQueue.pushFunction(
-            [&]()
-            {
-                VkBuffer vkBuffer = m_triangleMesh.vertexBuffer.buffer;
-                vmaDestroyBuffer(m_vmaAllocator, vkBuffer, m_triangleMesh.vertexBuffer.allocation);
-            });
-
         m_suzanneMesh = createMesh("assets/Suzanne/glTF/Suzanne.gltf");
-        m_deletionQueue.pushFunction(
-            [&]()
-            {
-                VkBuffer vkBuffer = m_suzanneMesh.vertexBuffer.buffer;
-                vmaDestroyBuffer(m_vmaAllocator, vkBuffer, m_suzanneMesh.vertexBuffer.allocation);
-            });
     }
 
     void Engine::run()
@@ -558,30 +565,31 @@ namespace lunar
     void Engine::render()
     {
         // Wait for the GPU to finish execution of the last frame. Max timeout is 1 second.
-        vkCheck(m_device.waitForFences(1u, &m_renderFence, true, ONE_SECOND_IN_NANOSECOND));
+        vkCheck(m_device.waitForFences(1u, &getCurrentFrameData().renderFence, true, ONE_SECOND_IN_NANOSECOND));
 
         // Reset fence.
-        vkCheck(m_device.resetFences(1u, &m_renderFence));
+        vkCheck(m_device.resetFences(1u, &getCurrentFrameData().renderFence));
 
         // Request image from swapchain.
         // Signal the presentation semaphore when image is acquired.
         uint32_t swapchainImageIndex{};
         vkCheck(m_device.acquireNextImageKHR(m_swapchain,
                                              ONE_SECOND_IN_NANOSECOND,
-                                             m_presentationSemaphore,
+                                             getCurrentFrameData().presentationSemaphore,
                                              {},
                                              &swapchainImageIndex));
 
-        m_commandBuffer.reset();
+        getCurrentFrameData().graphicsCommandBuffer.reset();
 
-        vk::CommandBuffer& cmd = m_commandBuffer;
+        vk::CommandBuffer& cmd = getCurrentFrameData().graphicsCommandBuffer;
 
         vk::CommandBufferBeginInfo commandBufferBeginInfo = {.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
 
         cmd.begin(commandBufferBeginInfo);
 
-        const vk::ClearValue clearValue = {.color = {std::array{0.0f, 0.0f, 0.0f, 1.0f}}};
-        const vk::ClearValue depthClearValue = {.depthStencil{
+        // Aka the render target view clear value.
+        const vk::ClearValue colorImageClearValue = {.color = {std::array{0.0f, 0.0f, 0.0f, 1.0f}}};
+        const vk::ClearValue depthImageClearValue = {.depthStencil{
             .depth = 1.0f,
             .stencil = 1u,
         }};
@@ -619,15 +627,15 @@ namespace lunar
             .imageLayout = vk::ImageLayout::eAttachmentOptimal,
             .loadOp = vk::AttachmentLoadOp::eClear,
             .storeOp = vk::AttachmentStoreOp::eStore,
-            .clearValue = clearValue,
+            .clearValue = colorImageClearValue,
         };
 
         const vk::RenderingAttachmentInfo depthAttachmentInfo = {
-            .imageView = m_depthTextureView,
+            .imageView = m_depthImageView,
             .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
             .loadOp = vk::AttachmentLoadOp::eClear,
             .storeOp = vk::AttachmentStoreOp::eStore,
-            .clearValue = depthClearValue,
+            .clearValue = depthImageClearValue,
         };
 
         const vk::RenderingInfo renderingInfo = {
@@ -703,15 +711,15 @@ namespace lunar
         // Presentation semaphore is ready when the swapchain image is ready.
         const vk::SubmitInfo submitInfo = {
             .waitSemaphoreCount = 1u,
-            .pWaitSemaphores = &m_presentationSemaphore,
+            .pWaitSemaphores = &getCurrentFrameData().presentationSemaphore,
             .pWaitDstStageMask = &waitStage,
             .commandBufferCount = 1u,
             .pCommandBuffers = &cmd,
             .signalSemaphoreCount = 1u,
-            .pSignalSemaphores = &m_renderSemaphore,
+            .pSignalSemaphores = &getCurrentFrameData().renderSemaphore,
         };
 
-        vkCheck(m_graphicsQueue.submit(1u, &submitInfo, m_renderFence));
+        vkCheck(m_graphicsQueue.submit(1u, &submitInfo, getCurrentFrameData().renderFence));
 
         // Setup for presentation.
 
@@ -719,7 +727,7 @@ namespace lunar
         // completed).
         const vk::PresentInfoKHR presentInfo = {
             .waitSemaphoreCount = 1u,
-            .pWaitSemaphores = &m_renderSemaphore,
+            .pWaitSemaphores = &getCurrentFrameData().renderSemaphore,
             .swapchainCount = 1u,
             .pSwapchains = &m_swapchain,
             .pImageIndices = &swapchainImageIndex,
@@ -732,6 +740,7 @@ namespace lunar
     {
         // Cleanup is done in the reverse order of creation. Handled by deletion queue.
         m_device.waitIdle();
+        m_graphicsQueue.waitIdle();
 
         m_deletionQueue.flush();
     }
@@ -845,6 +854,8 @@ namespace lunar
 
         // Cleanup the temporary staging buffer and its allocation.
         vmaDestroyBuffer(m_vmaAllocator, stagingBuffer, stagingBufferAllocation);
+
+        m_deletionQueue.pushFunction([=]() { vmaDestroyBuffer(m_vmaAllocator, buffer.buffer, buffer.allocation); });
 
         return buffer;
     }
