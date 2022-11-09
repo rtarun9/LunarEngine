@@ -15,6 +15,12 @@ namespace lunar
         VmaAllocation allocation{};
     };
 
+    struct Image
+    {
+        vk::Image image{};
+        VmaAllocation allocation{};
+    };
+
     struct Mesh
     {
         std::vector<Vertex> vertices{};
@@ -24,6 +30,7 @@ namespace lunar
     struct TransformBuffer
     {
         math::XMMATRIX modelMatrix{};
+        math::XMMATRIX viewProjectionMatrix{};
     };
 
     struct DeletionQueue

@@ -4,12 +4,18 @@
 
 struct SDL_Window;
 
+namespace tinygltf
+{
+    struct Model;
+}
+
 namespace lunar
 {
     class Engine
     {
       public:
         Engine() = default;
+        ~Engine();
 
         void init();
         void run();
@@ -24,7 +30,13 @@ namespace lunar
         void cleanup();
 
       private:
-        vk::ShaderModule createShaderModule(const std::string_view shaderPath);
+        [[nodiscard]] vk::ShaderModule createShaderModule(const std::string_view shaderPath);
+
+        // Creates GPU buffer.
+        [[nodiscard]] Buffer createGPUBuffer(const vk::BufferCreateInfo bufferCreateInfo, const void* data);
+
+        // Mesh creation functions.
+        [[nodiscard]] Mesh createMesh(const std::string_view modelPath);
 
       public:
         static constexpr uint32_t FRAME_COUNT = 3u;
@@ -53,8 +65,14 @@ namespace lunar
         vk::Queue m_graphicsQueue{};
         uint32_t m_graphicsQueueIndex{};
 
+        vk::Queue m_transferQueue{};
+        uint32_t m_transferQueueIndex{};
+
         vk::CommandPool m_commandPool{};
         vk::CommandBuffer m_commandBuffer{};
+
+        vk::CommandPool m_transferCommandPool{};
+        vk::CommandBuffer m_transferCommandBuffer{};
 
         vk::Semaphore m_presentationSemaphore{};
         vk::Semaphore m_renderSemaphore{};
@@ -62,9 +80,14 @@ namespace lunar
 
         VmaAllocator m_vmaAllocator{};
 
-        vk::PipelineLayout m_trianglePipelineLayout{};
-        vk::Pipeline m_trianglePipeline{};
+        Image m_depthTexture{};
+        vk::ImageView m_depthTextureView{};
+        vk::Format m_depthTextureFormat{vk::Format::eD32Sfloat};
+
+        vk::PipelineLayout m_pipelineLayout{};
+        vk::Pipeline m_pipeline{};
 
         Mesh m_triangleMesh{};
+        Mesh m_suzanneMesh{};
     };
 }

@@ -9,8 +9,24 @@
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.hpp>
 
+#define TINYGLTF_IMPLEMENTATION
+#define TINYGLTF_NO_EXTERNAL_IMAGE
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <tiny_gltf.h>
+
 namespace lunar
 {
+    Engine::~Engine()
+    {
+        // Cleanup.
+        cleanup();
+
+        // Causing some errors, not entirely sure why.
+        // SDL_DestroyWindow(m_window);
+        SDL_Quit();
+    }
+
     void Engine::init()
     {
         // Initialize SDL2 and create window.
@@ -178,6 +194,9 @@ namespace lunar
         m_graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
         m_graphicsQueueIndex = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
+        m_transferQueue = vkbDevice.get_queue(vkb::QueueType::transfer).value();
+        m_transferQueueIndex = vkbDevice.get_queue_index(vkb::QueueType::transfer).value();
+
         // Create the command pool.
 
         // Specify that we much be able to reset individual command buffers created from this pool.
@@ -202,6 +221,23 @@ namespace lunar
 
         m_commandBuffer = m_device.allocateCommandBuffers(commandBufferAllocateInfo).at(0);
 
+        // Create command buffer and command pool but for transfer queue.
+        const vk::CommandPoolCreateInfo transferCommandPoolCreateInfo = {
+            .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+            .queueFamilyIndex = m_transferQueueIndex,
+        };
+
+        m_transferCommandPool = m_device.createCommandPool(transferCommandPoolCreateInfo);
+        m_deletionQueue.pushFunction([&]() { m_device.destroyCommandPool(m_transferCommandPool); });
+
+        const vk::CommandBufferAllocateInfo transferCommandPoolAllocateInfo = {
+            .commandPool = m_transferCommandPool,
+            .level = vk::CommandBufferLevel::ePrimary,
+            .commandBufferCount = 1u,
+        };
+
+        m_transferCommandBuffer = m_device.allocateCommandBuffers(transferCommandPoolAllocateInfo).at(0);
+
         // Create synchronization primitives.
         // Specify that the Signaled flag is set while creating the fence.
         // Base case for the first loop (CPU - GPU sync).
@@ -215,8 +251,12 @@ namespace lunar
         m_renderSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
         m_presentationSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
 
-        m_deletionQueue.pushFunction([&]() { m_device.destroySemaphore(m_renderSemaphore); });
-        m_deletionQueue.pushFunction([&]() { m_device.destroySemaphore(m_presentationSemaphore); });
+        m_deletionQueue.pushFunction(
+            [&]()
+            {
+                m_device.destroySemaphore(m_renderSemaphore);
+                m_device.destroySemaphore(m_presentationSemaphore);
+            });
 
         // Initialize the vulkan memory allocator.
         const VmaAllocatorCreateInfo vmaAllocatorCreateInfo = {
@@ -231,6 +271,62 @@ namespace lunar
 
     void Engine::initPipelines()
     {
+        const vk::Extent3D depthTextureExtent = {
+            .width = m_windowExtent.width,
+            .height = m_windowExtent.height,
+            .depth = 1,
+        };
+
+        // Create the depth texture for use by the pipeline.
+        const vk::ImageCreateInfo depthTextureCreateInfo = {
+            .imageType = vk::ImageType::e2D,
+            .format = m_depthTextureFormat,
+            .extent = depthTextureExtent,
+            .mipLevels = 1u,
+            .arrayLayers = 1u,
+            .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+        };
+
+        VmaAllocationCreateInfo vmaDepthTextureAllocationCreateInfo = {
+            .usage = VMA_MEMORY_USAGE_GPU_ONLY,
+        };
+
+        const VkImageCreateInfo vkDepthTextureImageCreateInfo = depthTextureCreateInfo;
+
+        VkImage vkDepthTextureImage{};
+        vkCheck(vmaCreateImage(m_vmaAllocator,
+                               &vkDepthTextureImageCreateInfo,
+                               &vmaDepthTextureAllocationCreateInfo,
+                               &vkDepthTextureImage,
+                               &m_depthTexture.allocation,
+                               nullptr));
+        m_depthTexture.image = vkDepthTextureImage;
+
+        m_deletionQueue.pushFunction(
+            [&]()
+            {
+                const VkImage vkDepthImage = m_depthTexture.image;
+                vmaDestroyImage(m_vmaAllocator, vkDepthImage, m_depthTexture.allocation);
+            });
+
+        const vk::ImageViewCreateInfo depthTextureImageViewCreateInfo = {
+            .image = m_depthTexture.image,
+            .viewType = vk::ImageViewType::e2D,
+            .format = m_depthTextureFormat,
+            .subresourceRange =
+                {
+                    .aspectMask = vk::ImageAspectFlagBits::eDepth,
+                    .baseMipLevel = 0u,
+                    .levelCount = 1u,
+                    .baseArrayLayer = 0u,
+                    .layerCount = 1u,
+                },
+        };
+
+        // Create depth texture image view.
+        m_depthTextureView = m_device.createImageView(depthTextureImageViewCreateInfo);
+        m_deletionQueue.pushFunction([&]() { m_device.destroyImageView(m_depthTextureView); });
+
         // Create shader modules.
         const vk::ShaderModule triangleVertexShaderModule = createShaderModule("shaders/TriangleVS.cso");
         const vk::ShaderModule trianglePixelShaderModule = createShaderModule("shaders/TrianglePS.cso");
@@ -250,6 +346,7 @@ namespace lunar
 
         // Setup input state.
 
+        // There will be only one vertex binding which has per vertex input rate.
         // Vertex buffer will have float3 position, float3 normal, and float3 color for now.
         const vk::VertexInputBindingDescription mainVertexInputBindingDescription = {
             .binding = 0,
@@ -297,7 +394,7 @@ namespace lunar
             .depthClampEnable = false,
             .rasterizerDiscardEnable = false,
             .polygonMode = vk::PolygonMode::eFill,
-            .cullMode = vk::CullModeFlagBits::eNone,
+            .cullMode = vk::CullModeFlagBits::eBack,
             .frontFace = vk::FrontFace::eClockwise,
             .depthBiasEnable = false,
             .lineWidth = 1.0f,
@@ -355,8 +452,8 @@ namespace lunar
             .pPushConstantRanges = &pushConstant,
         };
 
-        m_trianglePipelineLayout = m_device.createPipelineLayout(pipelineLayoutCreateInfo);
-        m_deletionQueue.pushFunction([&]() { m_device.destroyPipelineLayout(m_trianglePipelineLayout); });
+        m_pipelineLayout = m_device.createPipelineLayout(pipelineLayoutCreateInfo);
+        m_deletionQueue.pushFunction([&]() { m_device.destroyPipelineLayout(m_pipelineLayout); });
 
         // Create the pipeline.
         const std::vector<vk::PipelineShaderStageCreateInfo> shaderStages = {
@@ -381,7 +478,7 @@ namespace lunar
             .pDepthStencilState = nullptr,
             .pColorBlendState = &colorBlendStateCreateInfo,
             .pDynamicState = nullptr,
-            .layout = m_trianglePipelineLayout,
+            .layout = m_pipelineLayout,
         };
 
         const auto trianglePipelineResult =
@@ -389,8 +486,8 @@ namespace lunar
 
         vkCheck(trianglePipelineResult.result);
 
-        m_trianglePipeline = trianglePipelineResult.value;
-        m_deletionQueue.pushFunction([&]() { m_device.destroyPipeline(m_trianglePipeline); });
+        m_pipeline = trianglePipelineResult.value;
+        m_deletionQueue.pushFunction([&]() { m_device.destroyPipeline(m_pipeline); });
 
         // Destroy shader modules.
         m_device.destroyShaderModule(triangleVertexShaderModule);
@@ -405,37 +502,25 @@ namespace lunar
         m_triangleMesh.vertices[1] = Vertex{.position = {0.0f, 0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}};
         m_triangleMesh.vertices[2] = Vertex{.position = {0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}};
 
-        // Create a vertex buffer for this mesh.
         const vk::BufferCreateInfo vertexBufferCreateInfo = {
-            .size = sizeof(Vertex) * m_triangleMesh.vertices.size(),
-            .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+            .size = m_triangleMesh.vertices.size() * sizeof(Vertex),
+            .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
         };
 
-        // The buffer is writable by the CPU and readable by the GPU.
-        const VmaAllocationCreateInfo vmaAllocationCreateInfo{.usage = VMA_MEMORY_USAGE_CPU_TO_GPU};
-
-        const VkBufferCreateInfo vkBufferCreateInfo = static_cast<VkBufferCreateInfo>(vertexBufferCreateInfo);
-        VkBuffer vkBuffer{};
-
-        // Allocate the buffer.
-        vkCheck(vmaCreateBuffer(m_vmaAllocator,
-                                &vkBufferCreateInfo,
-                                &vmaAllocationCreateInfo,
-                                &vkBuffer,
-                                &m_triangleMesh.vertexBuffer.allocation,
-                                nullptr));
-
-        void* data{};
-        vmaMapMemory(m_vmaAllocator, m_triangleMesh.vertexBuffer.allocation, &data);
-        std::memcpy(data, m_triangleMesh.vertices.data(), m_triangleMesh.vertices.size() * sizeof(Vertex));
-        vmaUnmapMemory(m_vmaAllocator, m_triangleMesh.vertexBuffer.allocation);
-
-        m_triangleMesh.vertexBuffer.buffer = vkBuffer;
+        m_triangleMesh.vertexBuffer = createGPUBuffer(vertexBufferCreateInfo, m_triangleMesh.vertices.data());
         m_deletionQueue.pushFunction(
             [&]()
             {
+                VkBuffer vkBuffer = m_triangleMesh.vertexBuffer.buffer;
                 vmaDestroyBuffer(m_vmaAllocator, vkBuffer, m_triangleMesh.vertexBuffer.allocation);
-                m_device.destroyBuffer(m_triangleMesh.vertexBuffer.buffer);
+            });
+
+        m_suzanneMesh = createMesh("assets/Suzanne/glTF/Suzanne.gltf");
+        m_deletionQueue.pushFunction(
+            [&]()
+            {
+                VkBuffer vkBuffer = m_suzanneMesh.vertexBuffer.buffer;
+                vmaDestroyBuffer(m_vmaAllocator, vkBuffer, m_suzanneMesh.vertexBuffer.allocation);
             });
     }
 
@@ -468,13 +553,6 @@ namespace lunar
 
             m_frameNumber++;
         }
-
-        // Cleanup.
-        cleanup();
-
-        // Causing some errors, not entirely sure why.
-        // SDL_DestroyWindow(m_window);
-        SDL_Quit();
     }
 
     void Engine::render()
@@ -502,9 +580,11 @@ namespace lunar
 
         cmd.begin(commandBufferBeginInfo);
 
-        const vk::ClearValue clearValue = {
-            .color = {std::array{0.0f, 0.0f, 0.0f, 1.0f}},
-        };
+        const vk::ClearValue clearValue = {.color = {std::array{0.0f, 0.0f, 0.0f, 1.0f}}};
+        const vk::ClearValue depthClearValue = {.depthStencil{
+            .depth = 1.0f,
+            .stencil = 1u,
+        }};
 
         // Start rendering.
 
@@ -542,6 +622,14 @@ namespace lunar
             .clearValue = clearValue,
         };
 
+        const vk::RenderingAttachmentInfo depthAttachmentInfo = {
+            .imageView = m_depthTextureView,
+            .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = depthClearValue,
+        };
+
         const vk::RenderingInfo renderingInfo = {
             .renderArea =
                 {
@@ -552,25 +640,40 @@ namespace lunar
             .viewMask = 0u,
             .colorAttachmentCount = 1u,
             .pColorAttachments = &colorAttachmentInfo,
+            .pDepthAttachment = &depthAttachmentInfo,
         };
 
         cmd.beginRendering(renderingInfo);
 
+        static const math::XMVECTOR eyePosition = math::XMVectorSet(0.0f, 0.0f, -5.0f, 1.0f);
+        static const math::XMVECTOR targetPosition = math::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+        static const math::XMVECTOR upDirection = math::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
         // Setup push constant data.
         const TransformBuffer transformBufferData = {
-            .modelMatrix = math::XMMatrixRotationZ(m_frameNumber * 0.01f),
+            .modelMatrix = math::XMMatrixRotationY(m_frameNumber * 0.01f) * math::XMMatrixTranslation(0.0f, 0.0f, 5.0f),
+            .viewProjectionMatrix =
+                math::XMMatrixLookAtLH(eyePosition, targetPosition, upDirection) *
+                math::XMMatrixPerspectiveFovLH(math::XMConvertToRadians(45.0f),
+                                               (float)m_windowExtent.width / (float)m_windowExtent.height,
+                                               0.1f,
+                                               100.0f),
         };
 
         const vk::DeviceSize vertexBufferOffset = 0;
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+
         cmd.bindVertexBuffers(0u, m_triangleMesh.vertexBuffer.buffer, vertexBufferOffset);
-        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_trianglePipeline);
-        cmd.pushConstants(m_trianglePipelineLayout,
+        cmd.pushConstants(m_pipelineLayout,
                           vk::ShaderStageFlagBits::eVertex,
                           0,
                           sizeof(TransformBuffer),
                           &transformBufferData);
 
         cmd.draw(3u, 1u, 0u, 0u);
+
+        cmd.bindVertexBuffers(0u, m_suzanneMesh.vertexBuffer.buffer, vertexBufferOffset);
+        cmd.draw(m_suzanneMesh.vertices.size(), 1u, 0u, 0u);
 
         cmd.endRendering();
 
@@ -664,5 +767,216 @@ namespace lunar
 
         const vk::ShaderModule shaderModule = m_device.createShaderModule(shaderModuleCreateInfo);
         return shaderModule;
+    }
+
+    Buffer Engine::createGPUBuffer(const vk::BufferCreateInfo bufferCreateInfo, const void* data)
+    {
+        // Create staging buffer (i.e in GPU / CPU shared memory).
+        const vk::BufferCreateInfo stagingBufferCreateInfo = {
+            .size = bufferCreateInfo.size,
+            .usage = vk::BufferUsageFlagBits::eTransferSrc,
+        };
+
+        VmaAllocationCreateInfo stagingBufferAllocationCreateInfo = {.usage = VMA_MEMORY_USAGE_CPU_TO_GPU};
+
+        VkBuffer stagingBuffer{};
+        VmaAllocation stagingBufferAllocation{};
+
+        const VkBufferCreateInfo vkStagingBufferCreateInfo = stagingBufferCreateInfo;
+
+        vkCheck(vmaCreateBuffer(m_vmaAllocator,
+                                &vkStagingBufferCreateInfo,
+                                &stagingBufferAllocationCreateInfo,
+                                &stagingBuffer,
+                                &stagingBufferAllocation,
+                                nullptr));
+
+        // Get a pointer to this memory allocation and copy the data passed into the function to this allocation.
+        void* dataPtr{};
+        vkCheck(vmaMapMemory(m_vmaAllocator, stagingBufferAllocation, &dataPtr));
+        std::memcpy(dataPtr, data, stagingBufferCreateInfo.size);
+        vmaUnmapMemory(m_vmaAllocator, stagingBufferAllocation);
+
+        // Create buffer (GPU only memory), that will be returned by the function.
+        Buffer buffer{};
+
+        const VmaAllocationCreateInfo vmaAllocationCreateInfo = {.usage = VMA_MEMORY_USAGE_GPU_ONLY};
+
+        const VkBufferCreateInfo vkBufferCreateInfo = bufferCreateInfo;
+
+        VkBuffer vkBuffer{};
+        vkCheck(vmaCreateBuffer(m_vmaAllocator,
+                                &vkBufferCreateInfo,
+                                &vmaAllocationCreateInfo,
+                                &vkBuffer,
+                                &buffer.allocation,
+                                nullptr));
+
+        buffer.buffer = vkBuffer;
+
+        // Reset the transfer command buffer and begin it.
+        m_transferCommandBuffer.reset();
+
+        const vk::CommandBufferBeginInfo transferCommandBufferBeginInfo = {
+            .flags = vk::CommandBufferUsageFlagBits::eSimultaneousUse,
+        };
+
+        m_transferCommandBuffer.begin(transferCommandBufferBeginInfo);
+
+        // Copy the data of staging buffer to the GPU only buffer.
+        const vk::BufferCopy bufferCopyRegion = {
+            .srcOffset = 0,
+            .dstOffset = 0,
+            .size = bufferCreateInfo.size,
+        };
+
+        m_transferCommandBuffer.copyBuffer(stagingBuffer, buffer.buffer, 1u, &bufferCopyRegion);
+
+        m_transferCommandBuffer.end();
+
+        // Prepare for submission.
+        const vk::SubmitInfo transferSubmitInfo = {
+            .commandBufferCount = 1u,
+            .pCommandBuffers = &m_transferCommandBuffer,
+        };
+
+        m_transferQueue.submit(transferSubmitInfo);
+        m_transferQueue.waitIdle();
+
+        // Cleanup the temporary staging buffer and its allocation.
+        vmaDestroyBuffer(m_vmaAllocator, stagingBuffer, stagingBufferAllocation);
+
+        return buffer;
+    }
+
+    Mesh Engine::createMesh(const std::string_view modelPath)
+    {
+        // Use tinygltf loader to load the model.
+
+        const std::string fullModelPath = m_rootDirectory + modelPath.data();
+
+        std::string warning{};
+        std::string error{};
+
+        tinygltf::TinyGLTF context{};
+
+        tinygltf::Model model{};
+
+        if (!context.LoadASCIIFromFile(&model, &error, &warning, fullModelPath))
+        {
+            if (!error.empty())
+            {
+                fatalError(error);
+            }
+
+            if (!warning.empty())
+            {
+                fatalError(warning);
+            }
+        }
+
+        // Build meshes.
+        const tinygltf::Scene& scene = model.scenes[model.defaultScene];
+
+        tinygltf::Node& node = model.nodes[0u];
+        node.mesh = std::max<int32_t>(0u, node.mesh);
+
+        const tinygltf::Mesh& nodeMesh = model.meshes[node.mesh];
+
+        // note(rtarun9) : for now have all vertices in single vertex buffer.
+        std::vector<Vertex> vertices{};
+
+        for (size_t i = 0; i < nodeMesh.primitives.size(); ++i)
+        {
+            std::vector<uint32_t> indices{};
+
+            // Reference used :
+            // https://github.com/mateeeeeee/Adria-DX12/blob/fc98468095bf5688a186ca84d94990ccd2f459b0/Adria/Rendering/EntityLoader.cpp.
+
+            // Get Accessors, buffer view and buffer for each attribute (position, textureCoord, normal).
+            tinygltf::Primitive primitive = nodeMesh.primitives[i];
+            const tinygltf::Accessor& indexAccesor = model.accessors[primitive.indices];
+
+            // Position data.
+            const tinygltf::Accessor& positionAccesor = model.accessors[primitive.attributes["POSITION"]];
+            const tinygltf::BufferView& positionBufferView = model.bufferViews[positionAccesor.bufferView];
+            const tinygltf::Buffer& positionBuffer = model.buffers[positionBufferView.buffer];
+
+            const int positionByteStride = positionAccesor.ByteStride(positionBufferView);
+            uint8_t const* const positions =
+                &positionBuffer.data[positionBufferView.byteOffset + positionAccesor.byteOffset];
+
+            // TextureCoord data.
+            const tinygltf::Accessor& textureCoordAccesor = model.accessors[primitive.attributes["TEXCOORD_0"]];
+            const tinygltf::BufferView& textureCoordBufferView = model.bufferViews[textureCoordAccesor.bufferView];
+            const tinygltf::Buffer& textureCoordBuffer = model.buffers[textureCoordBufferView.buffer];
+            const int textureCoordBufferStride = textureCoordAccesor.ByteStride(textureCoordBufferView);
+            uint8_t const* const texcoords =
+                &textureCoordBuffer.data[textureCoordBufferView.byteOffset + textureCoordAccesor.byteOffset];
+
+            // Normal data.
+            const tinygltf::Accessor& normalAccesor = model.accessors[primitive.attributes["NORMAL"]];
+            const tinygltf::BufferView& normalBufferView = model.bufferViews[normalAccesor.bufferView];
+            const tinygltf::Buffer& normalBuffer = model.buffers[normalBufferView.buffer];
+            const int normalByteStride = normalAccesor.ByteStride(normalBufferView);
+            uint8_t const* const normals = &normalBuffer.data[normalBufferView.byteOffset + normalAccesor.byteOffset];
+
+            // Fill in the vertices's array.
+            for (size_t i : std::views::iota(0u, positionAccesor.count))
+            {
+                const DirectX::XMFLOAT3 position{
+                    (reinterpret_cast<float const*>(positions + (i * positionByteStride)))[0],
+                    (reinterpret_cast<float const*>(positions + (i * positionByteStride)))[1],
+                    (reinterpret_cast<float const*>(positions + (i * positionByteStride)))[2]};
+
+                const DirectX::XMFLOAT2 textureCoord{
+                    (reinterpret_cast<float const*>(texcoords + (i * textureCoordBufferStride)))[0],
+                    (reinterpret_cast<float const*>(texcoords + (i * textureCoordBufferStride)))[1],
+                };
+
+                const DirectX::XMFLOAT3 normal{
+                    (reinterpret_cast<float const*>(normals + (i * normalByteStride)))[0],
+                    (reinterpret_cast<float const*>(normals + (i * normalByteStride)))[1],
+                    (reinterpret_cast<float const*>(normals + (i * normalByteStride)))[2],
+                };
+
+                // note(rtarun9) : using normals as colors for now, until texture loading is implemented.
+                vertices.emplace_back(Vertex{position, normal, normal});
+            }
+
+            // Get the index buffer data.
+            const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccesor.bufferView];
+            const tinygltf::Buffer& indexBuffer = model.buffers[indexBufferView.buffer];
+            const int indexByteStride = indexAccesor.ByteStride(indexBufferView);
+            uint8_t const* const indexes =
+                indexBuffer.data.data() + indexBufferView.byteOffset + indexAccesor.byteOffset;
+
+            // Fill indices array.
+            for (size_t i : std::views::iota(0u, indexAccesor.count))
+            {
+                if (indexAccesor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+                {
+                    indices.push_back(
+                        static_cast<uint32_t>((reinterpret_cast<uint16_t const*>(indexes + (i * indexByteStride)))[0]));
+                }
+                else if (indexAccesor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT)
+                {
+                    indices.push_back(
+                        static_cast<uint32_t>((reinterpret_cast<uint32_t const*>(indexes + (i * indexByteStride)))[0]));
+                }
+            }
+        }
+
+        Mesh mesh{};
+        mesh.vertices = std::move(vertices);
+
+        const vk::BufferCreateInfo vertexBufferCreateInfo = {
+            .size = sizeof(Vertex) * mesh.vertices.size(),
+            .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+        };
+
+        mesh.vertexBuffer = createGPUBuffer(vertexBufferCreateInfo, mesh.vertices.data());
+
+        return mesh;
     }
 }

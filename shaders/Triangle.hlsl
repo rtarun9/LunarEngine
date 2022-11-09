@@ -14,6 +14,7 @@ struct VsOutput
 struct TransformData
 {
     row_major matrix modelMatrix;
+    row_major matrix viewProjectionMatrix;
 };
 
 [[vk::push_constant]] ConstantBuffer<TransformData> transformBuffer : register(b0);
@@ -21,7 +22,7 @@ struct TransformData
 VsOutput VsMain(VertexInput input)
 {
     VsOutput output;
-    output.position = mul(float4(input.position, 1.0f), transformBuffer.modelMatrix);
+    output.position = mul(mul(float4(input.position, 1.0f), transformBuffer.modelMatrix), transformBuffer.viewProjectionMatrix);
     output.color = input.color;
 
     return output;
