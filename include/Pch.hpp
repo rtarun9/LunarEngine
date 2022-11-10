@@ -34,7 +34,7 @@ constexpr bool LUNAR_DEBUG = false;
 #include <DirectXMath.h>
 
 // Custom global headers.
-#include "LunarEngine/PrimitiveTypes.hpp"
+#include "LunarEngine/Common.hpp"
 #include "LunarEngine/Utils.hpp"
 
 // Global aliases

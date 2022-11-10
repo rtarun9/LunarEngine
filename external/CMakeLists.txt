@@ -18,6 +18,7 @@ FetchContent_Declare(
     GIT_TAG f639e2d8f54dd5431fac41c6f577113b1828d6f9
 )
 
+
 option(TINYGLTF_BUILD_LOADER_EXAMPLE "" OFF)
 FetchContent_Declare(
     tinygltf

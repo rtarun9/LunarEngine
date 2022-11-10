@@ -11,18 +11,24 @@ struct VsOutput
     float3 color : COLOR;
 };
 
-struct TransformData
+struct SceneBuffer
 {
-    row_major matrix modelMatrix;
     row_major matrix viewProjectionMatrix;
 };
 
-[[vk::push_constant]] ConstantBuffer<TransformData> transformBuffer : register(b0);
+struct TransformBuffer
+{
+    row_major matrix modelMatrix;
+};
+
+// [[vk::binding(x, y)]] : binding number x, set number x.
+[[vk::binding(0, 0)]] ConstantBuffer<SceneBuffer> sceneBuffer: register(b0, space0);
+[[vk::binding(0, 1)]] ConstantBuffer<TransformBuffer> transformBuffer : register(b0, space1);
 
 VsOutput VsMain(VertexInput input)
 {
     VsOutput output;
-    output.position = mul(mul(float4(input.position, 1.0f), transformBuffer.modelMatrix), transformBuffer.viewProjectionMatrix);
+    output.position = mul(mul(float4(input.position, 1.0f), transformBuffer.modelMatrix), sceneBuffer.viewProjectionMatrix);
     output.color = input.color;
 
     return output;
